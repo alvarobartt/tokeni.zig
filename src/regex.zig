@@ -60,10 +60,6 @@ test "Regex.findAll" {
     const matches = try regex.findAll(pattern, text);
     defer allocator.free(matches);
 
-    for (matches) |match| {
-        std.debug.print("{s}\n", .{match});
-    }
-
     try std.testing.expectEqual(@as(usize, 13), matches.len);
     try std.testing.expectEqualStrings("Hello", matches[0]);
     try std.testing.expectEqualStrings(" I", matches[2]);
