@@ -1,65 +1,135 @@
 const std = @import("std");
+const Regex = @import("regex.zig").Regex;
 
 pub const Tokenizer = struct {
     vocab: std.StringHashMap(u32),
+    vocab_r: std.AutoHashMap(u32, []const u8),
+    // merges: std.StringHashMap([]const u8),
+    regex: Regex,
+    arena: std.heap.ArenaAllocator,
     allocator: std.mem.Allocator,
 
-    pub fn init(allocator: std.mem.Allocator, path: []const u8) !Tokenizer {
-        // https://ziglang.org/documentation/master/std/#std.fs
-        const file_content = try std.fs.cwd().readFileAlloc(allocator, path, 1024 * 1024);
-        defer allocator.free(file_content);
+    // pub fn init(allocator: std.mem.Allocator, vocab_path: []const u8, merges_path: []const u8) !Tokenizer {
+    pub fn init(allocator: std.mem.Allocator, vocab_path: []const u8) !Tokenizer {
+        var arena = std.heap.ArenaAllocator.init(allocator);
+        errdefer arena.deinit();
+        const aallocator = arena.allocator();
 
-        // https://ziglang.org/documentation/master/std/#std.json
-        var json_tree = try std.json.parseFromSlice(std.json.Value, allocator, file_content, .{});
-        defer json_tree.deinit();
-
-        var hash_map = std.StringHashMap(u32).init(allocator);
+        var vocab = std.StringHashMap(u32).init(aallocator);
         // TODO: maybe this can be pulled from https://huggingface.co/openai-community/gpt2/blob/main/config.json#L30
-        try hash_map.ensureTotalCapacity(50257);
-        errdefer hash_map.deinit();
+        try vocab.ensureTotalCapacity(50257);
+        errdefer vocab.deinit();
 
-        const root = json_tree.value;
-        if (root == .object) {
-            var it = root.object.iterator();
-            while (it.next()) |entry| {
-                // as the key is a `[]const u8` i.e. not a primitive type, we need
-                // to copy it explicitly as otherwise we're just storing the pointer
-                // which can easily go out of scope and leave the `HashMap` invalid
-                const key = try allocator.dupe(u8, entry.key_ptr.*);
-                // on the other hand for primitive types we don't need to explicitly
-                // copy or dupe those, as those have a fixed size and are easy to copy
-                // and move
-                const value = entry.value_ptr.*;
-                if (value == .integer) {
-                    try hash_map.put(key, @as(u32, @intCast(value.integer)));
+        var vocab_r = std.AutoHashMap(u32, []const u8).init(aallocator);
+        try vocab_r.ensureTotalCapacity(50257);
+        errdefer vocab_r.deinit();
+
+        {
+            // https://ziglang.org/documentation/master/std/#std.fs
+            const vocab_content = try std.fs.cwd().readFileAlloc(aallocator, vocab_path, 1024 * 1024);
+            defer aallocator.free(vocab_content);
+
+            // https://ziglang.org/documentation/master/std/#std.json
+            var json_tree = try std.json.parseFromSlice(std.json.Value, aallocator, vocab_content, .{});
+            defer json_tree.deinit();
+
+            const root = json_tree.value;
+            if (root == .object) {
+                var it = root.object.iterator();
+                while (it.next()) |entry| {
+                    // as the key is a `[]const u8` i.e. not a primitive type, we need
+                    // to copy it explicitly as otherwise we're just storing the pointer
+                    // which can easily go out of scope and leave the `HashMap` invalid
+                    const key = try aallocator.dupe(u8, entry.key_ptr.*);
+                    // on the other hand for primitive types we don't need to explicitly
+                    // copy or dupe those, as those have a fixed size and are easy to copy
+                    // and move
+                    const value = @as(u32, @intCast(entry.value_ptr.*.integer));
+                    try vocab.put(key, value);
+                    try vocab_r.put(value, key);
                 }
             }
         }
 
+        // var merges = std.StringHashMap([]const u8).init(aallocator);
+        // try merges.ensureTotalCapacity(50000);
+        // errdefer merges.deinit();
+        //
+        // {
+        //     const merges_content = try std.fs.cwd().readFileAlloc(aallocator, merges_path, 1024 * 1024);
+        //     defer aallocator.free(merges_content);
+        //
+        //     var lines = std.mem.tokenize(u8, merges_content, "\n");
+        //     // skip the first line as it contains the `tokenizers` version
+        //     // e.g. `#version: 0.2`
+        //     _ = lines.next();
+        //     while (lines.next()) |line| {
+        //         var parts = std.mem.tokenize(u8, line, " ");
+        //         const key_part = parts.next() orelse continue;
+        //         const value_part = parts.next() orelse continue;
+        //
+        //         const key = try aallocator.dupe(u8, key_part);
+        //         const value = try aallocator.dupe(u8, value_part);
+        //
+        //         try merges.put(key, value);
+        //     }
+        // }
+
+        // TODO: maybe add the `pattern_str` as a given argument to the `init`
+        // method of `Regex` so that it uses the same patter in the `findAll`,
+        // similar to a pattern compilation so that the pattern is re-used (?)
+        // TODO: should it also use the `ArenaAllocator`?
+        const regex = Regex.init(allocator);
+
         return .{
-            .vocab = hash_map,
+            .vocab = vocab,
+            .vocab_r = vocab_r,
+            // .merges = merges,
+            .regex = regex,
+            .arena = arena,
             .allocator = allocator,
         };
     }
 
+    pub fn pre(self: *Tokenizer, text: []const u8) ![][]const u8 {
+        // https://github.com/openai/gpt-2/blob/9b63575ef42771a015060c964af2c3da4cf7c8ab/src/encoder.py#L53
+        const pattern = "('s|'t|'re|'ve|'m|'ll|'d| ?[[:alpha:]]+| ?[[:digit:]]+| ?[^[:alnum:][:space:]]+| +[[:space:]]*| +)";
+        return try self.regex.findAll(pattern, text);
+    }
+
+    // pub fn encode(self: Tokenizer, text: []const u8) ![]const u32 {
+    //     ...
+    // }
+    // pub fn decode(self: Tokenizer, input_ids: []const u32) ![]const u8 {
+    //     ...
+    // }
+
     pub fn deinit(self: *Tokenizer) void {
-        var it = self.vocab.iterator();
-        while (it.next()) |entry| {
-            self.allocator.free(entry.key_ptr.*);
-        }
-        self.vocab.deinit();
+        self.arena.deinit();
     }
 };
 
 test "Tokenizer" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    // NOTE: the allocator needs to ensure it has capacity for a `StringHashMap[u32]`
+    // and for a `StringHashMap[[]const u8]`
 
     // https://huggingface.co/openai-community/gpt2/blob/main/vocab.json
-    var tokenizer = try Tokenizer.init(allocator, "vocab.json");
+    // var tokenizer = try Tokenizer.init(std.testing.allocator, "vocab.json", "merges_test.txt");
+    var tokenizer = try Tokenizer.init(std.testing.allocator, "vocab.json");
     defer tokenizer.deinit();
+
+    const text = "Hello, I'm a test string with numbers 123 and symbols @#$!";
+    const matches = try tokenizer.pre(text);
+    defer std.testing.allocator.free(matches);
+
+    std.debug.print("\n", .{});
+    for (matches) |match| {
+        std.debug.print("match: {s}\n", .{ match });
+    }
 
     try std.testing.expectEqual(@as(u32, 50257), tokenizer.vocab.count());
     try std.testing.expect(tokenizer.vocab.contains("<|endoftext|>"));
+    try std.testing.expectEqual(@as(u32, 50257), tokenizer.vocab_r.count());
+    try std.testing.expect(std.mem.eql(u8, tokenizer.vocab_r.get(@as(u32, 50256)).?, "<|endoftext|>"));
+    // try std.testing.expectEqual(@as(u32, 50000), tokenizer.merges.count());
 }
