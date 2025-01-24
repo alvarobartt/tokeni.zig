@@ -4,10 +4,10 @@ const c = @cImport({
 });
 
 pub const Regex = struct {
-    allocator: std.mem.Allocator,
+    arena: std.heap.ArenaAllocator,
 
     pub fn init(allocator: std.mem.Allocator) Regex {
-        return Regex{ .allocator = allocator };
+        return Regex{ .arena = std.heap.ArenaAllocator.init(allocator) };
     }
 
     pub fn findAll(self: *Regex, pattern: []const u8, text: []const u8) ![][]const u8 {
@@ -23,7 +23,7 @@ pub const Regex = struct {
             return error.RegexCompilationFailed;
         }
 
-        var matches = std.ArrayList([]const u8).init(self.allocator);
+        var matches = std.ArrayList([]const u8).init(self.arena.allocator());
         errdefer matches.deinit();
 
         var offset: usize = 0;
@@ -44,6 +44,10 @@ pub const Regex = struct {
 
         return matches.toOwnedSlice();
     }
+
+    pub fn deinit(self: *Regex) void {
+        self.arena.deinit();
+    }
 };
 
 test "Regex.findAll" {
@@ -52,13 +56,13 @@ test "Regex.findAll" {
     const allocator = gpa.allocator();
 
     var regex = Regex.init(allocator);
+    defer regex.deinit();
 
     // https://github.com/openai/gpt-2/blob/9b63575ef42771a015060c964af2c3da4cf7c8ab/src/encoder.py#L53
     const pattern = "('s|'t|'re|'ve|'m|'ll|'d| ?[[:alpha:]]+| ?[[:digit:]]+| ?[^[:alnum:][:space:]]+| +[[:space:]]*| +)";
     const text = "Hello, I'm a test string with numbers 123 and symbols @#$!";
 
     const matches = try regex.findAll(pattern, text);
-    defer allocator.free(matches);
 
     try std.testing.expectEqual(@as(usize, 13), matches.len);
     try std.testing.expectEqualStrings("Hello", matches[0]);
