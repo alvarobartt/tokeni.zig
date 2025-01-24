@@ -1,5 +1,6 @@
 const std = @import("std");
 const Regex = @import("regex.zig").Regex;
+const bytesToUnicode = @import("bytes.zig").bytesToUnicode;
 
 pub const Tokenizer = struct {
     vocab: std.StringHashMap(u32),
@@ -80,6 +81,7 @@ pub const Tokenizer = struct {
         // similar to a pattern compilation so that the pattern is re-used (?)
         // TODO: should it also use the `ArenaAllocator`?
         const regex = Regex.init(allocator);
+        errdefer regex.deinit();
 
         return .{
             .vocab = vocab,
@@ -91,45 +93,68 @@ pub const Tokenizer = struct {
         };
     }
 
-    pub fn pre(self: *Tokenizer, text: []const u8) ![][]const u8 {
+    fn pre(self: *Tokenizer, text: []const u8) ![][]const u8 {
         // https://github.com/openai/gpt-2/blob/9b63575ef42771a015060c964af2c3da4cf7c8ab/src/encoder.py#L53
         const pattern = "('s|'t|'re|'ve|'m|'ll|'d| ?[[:alpha:]]+| ?[[:digit:]]+| ?[^[:alnum:][:space:]]+| +[[:space:]]*| +)";
         return try self.regex.findAll(pattern, text);
     }
 
-    // pub fn encode(self: Tokenizer, text: []const u8) ![]const u32 {
-    //     ...
-    // }
-    // pub fn decode(self: Tokenizer, input_ids: []const u32) ![]const u8 {
-    //     ...
-    // }
+    pub fn encode(self: *Tokenizer, text: []const u8) ![]const u32 {
+        var byte_encoding = std.ArrayList([]const u8).init(self.arena.allocator());
+        const matches = try self.pre(text);
+        for (matches) |match| {
+            const match_encoding = try bytesToUnicode(self.arena.allocator(), match);
+            try byte_encoding.append(match_encoding);
+        }
+
+        var text_encoding = std.ArrayList(u32).init(self.arena.allocator());
+        for (byte_encoding.items) |encoding| {
+            if (self.vocab.get(encoding)) |v| {
+                try text_encoding.append(v);
+            } else {
+                var window: usize = 0;
+                while (window < encoding.len) {
+                    // for ascii returns 1, but for bytes as e.g. `ġ` the unicode code
+                    // point takes 2 bytes in utf-8 (indeed utf-8 characters can be 1-4
+                    // bytes)
+                    const code_point_length = std.unicode.utf8ByteSequenceLength(encoding[window]) catch {
+                        return error.InvalidByteEncoding;
+                    };
+                    // prevents reading past the end of the buffer
+                    if (window + code_point_length > encoding.len) return error.InvalidSplit;
+
+                    const code_point = encoding[window..window+code_point_length];
+                    window += code_point_length;
+
+                    if (self.vocab.get(code_point)) |byte_token| {
+                        try text_encoding.append(byte_token);
+                    } else {
+                        std.debug.print("Unknown token: {s}\n", .{code_point});
+                        return error.UnknownToken;
+                    }
+                }
+            }
+        }
+        return text_encoding.toOwnedSlice();
+    }
 
     pub fn deinit(self: *Tokenizer) void {
+        self.regex.deinit();
         self.arena.deinit();
     }
 };
 
 test "Tokenizer" {
-    // NOTE: the allocator needs to ensure it has capacity for a `StringHashMap[u32]`
-    // and for a `StringHashMap[[]const u8]`
-
     // https://huggingface.co/openai-community/gpt2/blob/main/vocab.json
-    // var tokenizer = try Tokenizer.init(std.testing.allocator, "vocab.json", "merges_test.txt");
     var tokenizer = try Tokenizer.init(std.testing.allocator, "vocab.json");
     defer tokenizer.deinit();
-
-    const text = "Hello, I'm a test string with numbers 123 and symbols @#$!";
-    const matches = try tokenizer.pre(text);
-    defer std.testing.allocator.free(matches);
-
-    std.debug.print("\n", .{});
-    for (matches) |match| {
-        std.debug.print("match: {s}\n", .{ match });
-    }
 
     try std.testing.expectEqual(@as(u32, 50257), tokenizer.vocab.count());
     try std.testing.expect(tokenizer.vocab.contains("<|endoftext|>"));
     try std.testing.expectEqual(@as(u32, 50257), tokenizer.vocab_r.count());
     try std.testing.expect(std.mem.eql(u8, tokenizer.vocab_r.get(@as(u32, 50256)).?, "<|endoftext|>"));
-    // try std.testing.expectEqual(@as(u32, 50000), tokenizer.merges.count());
+
+    const text = "Hello, I'm a test string with numbers 123 and symbols @#$!";
+    const encoded_text = try tokenizer.encode(text);
+    std.debug.print("encoded text {any}\n", .{ encoded_text });
 }
