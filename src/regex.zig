@@ -51,11 +51,7 @@ pub const Regex = struct {
 };
 
 test "Regex.findAll" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
-
-    var regex = Regex.init(allocator);
+    var regex = Regex.init(std.testing.allocator);
     defer regex.deinit();
 
     // https://github.com/openai/gpt-2/blob/9b63575ef42771a015060c964af2c3da4cf7c8ab/src/encoder.py#L53
