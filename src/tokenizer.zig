@@ -114,7 +114,7 @@ pub const Tokenizer = struct {
             } else {
                 var window: usize = 0;
                 while (window < encoding.len) {
-                    // for ascii returns 1, but for bytes as e.g. `ġ` the unicode code
+                    // for ascii returns 1, but for bytes as e.g. `Ġ` the unicode code
                     // point takes 2 bytes in utf-8 (indeed utf-8 characters can be 1-4
                     // bytes)
                     const code_point_length = std.unicode.utf8ByteSequenceLength(encoding[window]) catch {
