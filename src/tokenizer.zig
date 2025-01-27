@@ -2,16 +2,20 @@ const std = @import("std");
 const Regex = @import("regex.zig").Regex;
 const bytesToUnicode = @import("bytes.zig").bytesToUnicode;
 
+const Pair = struct {
+    left: []const u8,
+    right: []const u8,
+};
+
 pub const Tokenizer = struct {
     vocab: std.StringHashMap(u32),
     vocab_r: std.AutoHashMap(u32, []const u8),
-    // merges: std.StringHashMap([]const u8),
+    merges: std.ArrayList(Pair),
     regex: Regex,
     arena: std.heap.ArenaAllocator,
     allocator: std.mem.Allocator,
 
-    // pub fn init(allocator: std.mem.Allocator, vocab_path: []const u8, merges_path: []const u8) !Tokenizer {
-    pub fn init(allocator: std.mem.Allocator, vocab_path: []const u8) !Tokenizer {
+    pub fn init(allocator: std.mem.Allocator, vocab_path: []const u8, merges_path: []const u8) !Tokenizer {
         var arena = std.heap.ArenaAllocator.init(allocator);
         errdefer arena.deinit();
         const aallocator = arena.allocator();
@@ -52,29 +56,28 @@ pub const Tokenizer = struct {
             }
         }
 
-        // var merges = std.StringHashMap([]const u8).init(aallocator);
-        // try merges.ensureTotalCapacity(50000);
-        // errdefer merges.deinit();
-        //
-        // {
-        //     const merges_content = try std.fs.cwd().readFileAlloc(aallocator, merges_path, 1024 * 1024);
-        //     defer aallocator.free(merges_content);
-        //
-        //     var lines = std.mem.tokenize(u8, merges_content, "\n");
-        //     // skip the first line as it contains the `tokenizers` version
-        //     // e.g. `#version: 0.2`
-        //     _ = lines.next();
-        //     while (lines.next()) |line| {
-        //         var parts = std.mem.tokenize(u8, line, " ");
-        //         const key_part = parts.next() orelse continue;
-        //         const value_part = parts.next() orelse continue;
-        //
-        //         const key = try aallocator.dupe(u8, key_part);
-        //         const value = try aallocator.dupe(u8, value_part);
-        //
-        //         try merges.put(key, value);
-        //     }
-        // }
+        var merges = std.ArrayList(Pair).init(aallocator);
+        try merges.ensureTotalCapacity(50000);
+        errdefer merges.deinit();
+
+        {
+            const merges_content = try std.fs.cwd().readFileAlloc(aallocator, merges_path, 1024 * 1024);
+            defer aallocator.free(merges_content);
+
+            var lines = std.mem.tokenize(u8, merges_content, "\n");
+            // skip the first line as it contains the `tokenizers` version
+            // e.g. `#version: 0.2`
+            _ = lines.next();
+            while (lines.next()) |line| {
+                var parts = std.mem.tokenize(u8, line, " ");
+                const left_part = parts.next() orelse continue;
+                const right_part = parts.next() orelse continue;
+
+                const left = try aallocator.dupe(u8, left_part);
+                const right = try aallocator.dupe(u8, right_part);
+                try merges.append(.{ .left = left, .right = right });
+            }
+        }
 
         // TODO: maybe add the `pattern_str` as a given argument to the `init`
         // method of `Regex` so that it uses the same patter in the `findAll`,
@@ -86,7 +89,7 @@ pub const Tokenizer = struct {
         return .{
             .vocab = vocab,
             .vocab_r = vocab_r,
-            // .merges = merges,
+            .merges = merges,
             .regex = regex,
             .arena = arena,
             .allocator = allocator,
@@ -117,6 +120,8 @@ pub const Tokenizer = struct {
             if (self.vocab.get(encoding)) |v| {
                 try text_encoding.append(v);
             } else {
+                var code_points = std.ArrayList([]const u8).init(self.arena.allocator());
+                // split each token into individual unicode code points
                 var window: usize = 0;
                 while (window < encoding.len) {
                     // for ascii returns 1, but for bytes as e.g. `Ġ` the unicode code
@@ -130,13 +135,21 @@ pub const Tokenizer = struct {
 
                     const code_point = encoding[window..window+code_point_length];
                     window += code_point_length;
+                    try code_points.append(code_point);
+                }
 
-                    if (self.vocab.get(code_point)) |byte_token| {
-                        try text_encoding.append(byte_token);
-                    } else {
-                        std.debug.print("Unknown token: {s}\n", .{code_point});
-                        return error.UnknownToken;
+                // given all the code points of a token, merge each code point with
+                // the next one to create pairs, and then merge if the pair is found
+                while (true) {
+                    var pairs = std.ArrayList(Pair).init(self.arena.allocator());
+                    for (0..code_points.items.len - 1) |idx| {
+                        try pairs.append(.{ .left = code_points.items[idx], .right = code_points.items[idx+1] });
                     }
+                    break;
+
+                    // TODO: loop over pairs and check if any pair is on merges
+                    // if so, merge those and update code_points.items accordingly
+                    // and loop again, break only if no pairs have been found
                 }
             }
         }
@@ -146,7 +159,7 @@ pub const Tokenizer = struct {
 
 test "Tokenizer" {
     // https://huggingface.co/openai-community/gpt2/blob/main/vocab.json
-    var tokenizer = try Tokenizer.init(std.testing.allocator, "vocab.json");
+    var tokenizer = try Tokenizer.init(std.testing.allocator, "vocab.json", "merges.txt");
     defer tokenizer.deinit();
 
     try std.testing.expectEqual(@as(u32, 50257), tokenizer.vocab.count());
@@ -156,5 +169,8 @@ test "Tokenizer" {
 
     const text = "Hello, I'm a test string with numbers 123 and symbols @#$!";
     const encoded_text = try tokenizer.encode(text);
-    std.debug.print("encoded text {any}\n", .{ encoded_text });
+    try std.testing.expectEqualSlices(u32, encoded_text, &[_]u32{
+        15496, 11, 314, 1101, 257, 1332,
+        4731, 351, 3146, 17031, 290, 14354
+    });
 }
