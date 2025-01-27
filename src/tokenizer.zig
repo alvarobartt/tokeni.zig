@@ -93,6 +93,11 @@ pub const Tokenizer = struct {
         };
     }
 
+    pub fn deinit(self: *Tokenizer) void {
+        self.regex.deinit();
+        self.arena.deinit();
+    }
+
     fn pre(self: *Tokenizer, text: []const u8) ![][]const u8 {
         // https://github.com/openai/gpt-2/blob/9b63575ef42771a015060c964af2c3da4cf7c8ab/src/encoder.py#L53
         const pattern = "('s|'t|'re|'ve|'m|'ll|'d| ?[[:alpha:]]+| ?[[:digit:]]+| ?[^[:alnum:][:space:]]+| +[[:space:]]*| +)";
@@ -136,11 +141,6 @@ pub const Tokenizer = struct {
             }
         }
         return text_encoding.toOwnedSlice();
-    }
-
-    pub fn deinit(self: *Tokenizer) void {
-        self.regex.deinit();
-        self.arena.deinit();
     }
 };
 

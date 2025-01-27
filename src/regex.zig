@@ -10,6 +10,10 @@ pub const Regex = struct {
         return Regex{ .arena = std.heap.ArenaAllocator.init(allocator) };
     }
 
+    pub fn deinit(self: *Regex) void {
+        self.arena.deinit();
+    }
+
     pub fn findAll(self: *Regex, pattern: []const u8, text: []const u8) ![][]const u8 {
         // https://www.gnu.org/software/libc/manual/html_node/POSIX-Regexp-Compilation.html#index-regex_005ft
         var regex: c.regex_t = undefined;
@@ -43,10 +47,6 @@ pub const Regex = struct {
         }
 
         return matches.toOwnedSlice();
-    }
-
-    pub fn deinit(self: *Regex) void {
-        self.arena.deinit();
     }
 };
 
