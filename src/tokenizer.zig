@@ -7,10 +7,26 @@ const Pair = struct {
     right: []const u8,
 };
 
+const PairContext = struct {
+    pub fn hash(self: @This(), pair: Pair) u64 {
+        _ = self;
+        var hasher = std.hash.Wyhash.init(0);
+        hasher.update(pair.left);
+        hasher.update(pair.right);
+        return hasher.final();
+    }
+
+    pub fn eql(self: @This(), a: Pair, b: Pair) bool {
+        _ = self;
+        return std.mem.eql(u8, a.left, b.left) and std.mem.eql(u8, a.right, b.right);
+    }
+};
+
 pub const Tokenizer = struct {
     vocab: std.StringHashMap(u32),
     vocab_r: std.AutoHashMap(u32, []const u8),
     merges: std.ArrayList(Pair),
+    merges_map: std.HashMap(Pair, u32, PairContext, std.hash_map.default_max_load_percentage),
     regex: Regex,
     arena: std.heap.ArenaAllocator,
     allocator: std.mem.Allocator,
@@ -60,6 +76,10 @@ pub const Tokenizer = struct {
         try merges.ensureTotalCapacity(50000);
         errdefer merges.deinit();
 
+        var merges_map = std.HashMap(Pair, u32, PairContext, std.hash_map.default_max_load_percentage).initContext(aallocator, PairContext{});
+        try merges_map.ensureTotalCapacity(50000);
+        errdefer merges_map.deinit();
+
         {
             const merges_content = try std.fs.cwd().readFileAlloc(aallocator, merges_path, 1024 * 1024);
             defer aallocator.free(merges_content);
@@ -68,6 +88,7 @@ pub const Tokenizer = struct {
             // skip the first line as it contains the `tokenizers` version
             // e.g. `#version: 0.2`
             _ = lines.next();
+            var idx: u32 = 0;
             while (lines.next()) |line| {
                 var parts = std.mem.tokenize(u8, line, " ");
                 const left_part = parts.next() orelse continue;
@@ -76,6 +97,8 @@ pub const Tokenizer = struct {
                 const left = try aallocator.dupe(u8, left_part);
                 const right = try aallocator.dupe(u8, right_part);
                 try merges.append(.{ .left = left, .right = right });
+                try merges_map.put(.{ .left = left, .right = right }, idx);
+                idx += 1;
             }
         }
 
@@ -90,6 +113,7 @@ pub const Tokenizer = struct {
             .vocab = vocab,
             .vocab_r = vocab_r,
             .merges = merges,
+            .merges_map = merges_map,
             .regex = regex,
             .arena = arena,
             .allocator = allocator,
@@ -109,6 +133,8 @@ pub const Tokenizer = struct {
 
     pub fn encode(self: *Tokenizer, text: []const u8) ![]const u32 {
         var byte_encoding = std.ArrayList([]const u8).init(self.arena.allocator());
+        defer byte_encoding.deinit();
+
         const matches = try self.pre(text);
         for (matches) |match| {
             const match_encoding = try bytesToUnicode(self.arena.allocator(), match);
@@ -116,11 +142,15 @@ pub const Tokenizer = struct {
         }
 
         var text_encoding = std.ArrayList(u32).init(self.arena.allocator());
+        defer text_encoding.deinit();
+
         for (byte_encoding.items) |encoding| {
             if (self.vocab.get(encoding)) |v| {
                 try text_encoding.append(v);
             } else {
                 var code_points = std.ArrayList([]const u8).init(self.arena.allocator());
+                defer code_points.deinit();
+
                 // split each token into individual unicode code points
                 var window: usize = 0;
                 while (window < encoding.len) {
@@ -138,18 +168,52 @@ pub const Tokenizer = struct {
                     try code_points.append(code_point);
                 }
 
-                // given all the code points of a token, merge each code point with
-                // the next one to create pairs, and then merge if the pair is found
-                while (true) {
+                while (code_points.items.len > 1) {
                     var pairs = std.ArrayList(Pair).init(self.arena.allocator());
-                    for (0..code_points.items.len - 1) |idx| {
-                        try pairs.append(.{ .left = code_points.items[idx], .right = code_points.items[idx+1] });
-                    }
-                    break;
+                    defer pairs.deinit();
 
-                    // TODO: loop over pairs and check if any pair is on merges
-                    // if so, merge those and update code_points.items accordingly
-                    // and loop again, break only if no pairs have been found
+                    for (0..code_points.items.len - 1) |i| {
+                        try pairs.append(.{ .left = code_points.items[i], .right = code_points.items[i + 1] });
+                    }
+
+                    var best_pair_index: ?usize = null;
+                    var best_pair_rank: ?u32 = null;
+                    for (pairs.items, 0..) |pair, idx| {
+                        if (self.merges_map.get(pair)) |rank| {
+                            if (best_pair_rank == null or rank < best_pair_rank.?) {
+                                best_pair_rank = rank;
+                                best_pair_index = idx;
+                            }
+                        }
+                    }
+                    // if (best_pair_index) |idx| {
+                    //     const pair = pairs.items[idx];
+                    //     std.debug.print("Merging: '{s}' + '{s}' (rank {d})\n", .{
+                    //         pair.left,
+                    //         pair.right,
+                    //         best_pair_rank.?
+                    //     });
+                    // }
+
+                    if (best_pair_index == null) break;
+
+                    const merge_idx = best_pair_index.?;
+                    const merged_token_len = code_points.items[merge_idx].len + code_points.items[merge_idx + 1].len;
+                    const merged_token = try self.arena.allocator().alloc(u8, merged_token_len);
+
+                    std.mem.copyForwards(u8, merged_token[0..code_points.items[merge_idx].len], code_points.items[merge_idx]);
+                    std.mem.copyForwards(u8, merged_token[code_points.items[merge_idx].len..], code_points.items[merge_idx + 1]);
+
+                    code_points.items[merge_idx] = merged_token;
+                    _ = code_points.orderedRemove(merge_idx + 1);
+                }
+
+                for (code_points.items) |token| {
+                    if (self.vocab.get(token)) |vocab_id| {
+                        try text_encoding.append(vocab_id);
+                    } else {
+                        return error.TokenNotInVocab;
+                    }
                 }
             }
         }
@@ -170,7 +234,7 @@ test "Tokenizer" {
     const text = "Hello, I'm a test string with numbers 123 and symbols @#$!";
     const encoded_text = try tokenizer.encode(text);
     try std.testing.expectEqualSlices(u32, encoded_text, &[_]u32{
-        15496, 11, 314, 1101, 257, 1332,
-        4731, 351, 3146, 17031, 290, 14354
+        15496, 11, 314, 1101, 257, 1332, 4731, 351,
+        3146, 17031, 290, 14354, 2488, 29953, 0
     });
 }
