@@ -1,6 +1,7 @@
 const std = @import("std");
 const Regex = @import("regex.zig").Regex;
 const bytesToUnicode = @import("bytes.zig").bytesToUnicode;
+const splitWithDelimiters = @import("split.zig").splitWithDelimiters;
 
 const Pair = struct {
     left: []const u8,
@@ -31,7 +32,7 @@ pub const Tokenizer = struct {
     arena: std.heap.ArenaAllocator,
     allocator: std.mem.Allocator,
 
-    pub fn init(allocator: std.mem.Allocator, vocab_path: []const u8, merges_path: []const u8) !Tokenizer {
+    pub fn init(vocab_path: []const u8, merges_path: []const u8, allocator: std.mem.Allocator) !Tokenizer {
         var arena = std.heap.ArenaAllocator.init(allocator);
         errdefer arena.deinit();
         const aallocator = arena.allocator();
@@ -105,7 +106,6 @@ pub const Tokenizer = struct {
         // TODO: maybe add the `pattern_str` as a given argument to the `init`
         // method of `Regex` so that it uses the same patter in the `findAll`,
         // similar to a pattern compilation so that the pattern is re-used (?)
-        // TODO: should it also use the `ArenaAllocator`?
         const regex = Regex.init(allocator);
         errdefer regex.deinit();
 
@@ -120,7 +120,7 @@ pub const Tokenizer = struct {
         };
     }
 
-    pub fn deinit(self: *Tokenizer) void {
+    pub fn deinit(self: Tokenizer) void {
         self.regex.deinit();
         self.arena.deinit();
     }
@@ -135,10 +135,23 @@ pub const Tokenizer = struct {
         var byte_encoding = std.ArrayList([]const u8).init(self.arena.allocator());
         defer byte_encoding.deinit();
 
-        const matches = try self.pre(text);
-        for (matches) |match| {
-            const match_encoding = try bytesToUnicode(self.arena.allocator(), match);
-            try byte_encoding.append(match_encoding);
+        // TODO: special_tokens needs to be sorted as it has priority, just like the merges
+        const delimiters = &[_][]const u8{ "<|endoftext|>" };
+        const splits = try splitWithDelimiters(self.arena.allocator(), text, delimiters);
+        for (0..splits.len) |idx| {
+            const split = try self.arena.allocator().dupe(u8, splits[idx]);
+            if (std.mem.eql(u8, split, "<|endoftext|>")) {
+                try byte_encoding.append(split);
+            } else {
+                const split_null_terminated = try self.arena.allocator().dupeZ(u8, split);
+                const matches = try self.pre(split_null_terminated);
+                for (matches) |match| {
+                    // TODO: most likely redundant, we can keep the code points calculated just
+                    // once rather than every time
+                    const match_encoding = try bytesToUnicode(self.arena.allocator(), match);
+                    try byte_encoding.append(match_encoding);
+                }
+            }
         }
 
         var text_encoding = std.ArrayList(u32).init(self.arena.allocator());
@@ -186,14 +199,14 @@ pub const Tokenizer = struct {
                             }
                         }
                     }
-                    // if (best_pair_index) |idx| {
-                    //     const pair = pairs.items[idx];
-                    //     std.debug.print("Merging: '{s}' + '{s}' (rank {d})\n", .{
-                    //         pair.left,
-                    //         pair.right,
-                    //         best_pair_rank.?
-                    //     });
-                    // }
+                    if (best_pair_index) |idx| {
+                        const pair = pairs.items[idx];
+                        std.debug.print("Merging: '{s}' + '{s}' (rank {d})\n", .{
+                            pair.left,
+                            pair.right,
+                            best_pair_rank.?
+                        });
+                    }
 
                     if (best_pair_index == null) break;
 
@@ -223,7 +236,7 @@ pub const Tokenizer = struct {
 
 test "Tokenizer" {
     // https://huggingface.co/openai-community/gpt2/blob/main/vocab.json
-    var tokenizer = try Tokenizer.init(std.testing.allocator, "vocab.json", "merges.txt");
+    var tokenizer = try Tokenizer.init("vocab.json", "merges.txt", std.testing.allocator);
     defer tokenizer.deinit();
 
     try std.testing.expectEqual(@as(u32, 50257), tokenizer.vocab.count());
@@ -231,10 +244,10 @@ test "Tokenizer" {
     try std.testing.expectEqual(@as(u32, 50257), tokenizer.vocab_r.count());
     try std.testing.expect(std.mem.eql(u8, tokenizer.vocab_r.get(@as(u32, 50256)).?, "<|endoftext|>"));
 
-    const text = "Hello, I'm a test string with numbers 123 and symbols @#$!";
+    const text = "Hello, I'm a test string with numbers 123 and symbols @#$!<|endoftext|>";
     const encoded_text = try tokenizer.encode(text);
     try std.testing.expectEqualSlices(u32, encoded_text, &[_]u32{
         15496, 11, 314, 1101, 257, 1332, 4731, 351,
-        3146, 17031, 290, 14354, 2488, 29953, 0
+        3146, 17031, 290, 14354, 2488, 29953, 0, 50256
     });
 }
