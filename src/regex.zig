@@ -10,11 +10,19 @@ pub const Regex = struct {
         return Regex{ .arena = std.heap.ArenaAllocator.init(allocator) };
     }
 
-    pub fn deinit(self: *Regex) void {
+    pub fn deinit(self: Regex) void {
         self.arena.deinit();
     }
 
     pub fn findAll(self: *Regex, pattern: []const u8, text: []const u8) ![][]const u8 {
+        // c expects null-terminated strings so this is just an additional harmless check
+        const text_null_terminated: []const u8 = if (text.len == 0 or text[text.len - 1] != 0) block: {
+            var buffer = try self.arena.allocator().alloc(u8, text.len + 1);
+            std.mem.copyForwards(u8, buffer[0..text.len], text);
+            buffer[text.len] = 0;
+            break :block buffer;
+        } else text;
+
         // https://www.gnu.org/software/libc/manual/html_node/POSIX-Regexp-Compilation.html#index-regex_005ft
         var regex: c.regex_t = undefined;
         // https://www.gnu.org/software/libc/manual/html_node/POSIX-Regexp-Compilation.html#index-regcomp
@@ -35,13 +43,13 @@ pub const Regex = struct {
             // https://www.gnu.org/software/libc/manual/html_node/Regexp-Subexpressions.html#index-regmatch_005ft
             var pmatch: [1]c.regmatch_t = undefined;
             // https://www.gnu.org/software/libc/manual/html_node/Matching-POSIX-Regexps.html#index-regexec
-            const exec_result = c.regexec(&regex, text[offset..].ptr, 1, &pmatch, 0);
+            const exec_result = c.regexec(&regex, text_null_terminated[offset..].ptr, 1, &pmatch, 0);
 
             if (exec_result != 0) break;
 
             const start = offset + @as(usize, @intCast(pmatch[0].rm_so));
             const end = offset + @as(usize, @intCast(pmatch[0].rm_eo));
-            try matches.append(text[start..end]);
+            try matches.append(text_null_terminated[start..end]);
 
             offset = end;
         }
