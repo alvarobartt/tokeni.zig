@@ -16,7 +16,7 @@ pub const Tokenizer = struct {
     arena: std.heap.ArenaAllocator,
     allocator: std.mem.Allocator,
 
-    pub fn init(vocab_path: []const u8, merges_path: []const u8, pattern: []const u8, allocator: std.mem.Allocator) !Tokenizer {
+    pub fn init(vocab_path: []const u8, merges_path: []const u8, pattern: []const u8, special_tokens: std.ArrayList([]const u8), allocator: std.mem.Allocator) !Tokenizer {
         // TODO: do we really need the arena
         var arena = std.heap.ArenaAllocator.init(allocator);
         errdefer arena.deinit();
@@ -90,10 +90,6 @@ pub const Tokenizer = struct {
 
         const regex = try Regex.init(allocator, pattern);
         errdefer regex.deinit();
-
-        var special_tokens = std.ArrayList([]const u8).init(aallocator);
-        errdefer special_tokens.deinit();
-        try special_tokens.append("<|endoftext|>");
 
         return .{
             .vocab = vocab,
@@ -217,9 +213,19 @@ pub const Tokenizer = struct {
 };
 
 test "Tokenizer" {
+    var special_tokens = std.ArrayList([]const u8).init(std.testing.allocator);
+    defer special_tokens.deinit();
+    try special_tokens.append("<|endoftext|>");
+
     // https://huggingface.co/openai-community/gpt2/blob/main/vocab.json
     // https://huggingface.co/openai-community/gpt2/blob/main/merges.txt
-    var tokenizer = try Tokenizer.init("vocab.json", "merges.txt", "('s|'t|'re|'ve|'m|'ll|'d| ?[[:alpha:]]+| ?[[:digit:]]+| ?[^[:alnum:][:space:]]+| +[[:space:]]*| +)", std.testing.allocator);
+    var tokenizer = try Tokenizer.init(
+        "vocab.json",
+        "merges.txt",
+        "('s|'t|'re|'ve|'m|'ll|'d| ?[[:alpha:]]+| ?[[:digit:]]+| ?[^[:alnum:][:space:]]+| +[[:space:]]*| +)",
+        special_tokens,
+        std.testing.allocator,
+    );
 
     defer tokenizer.deinit();
 
