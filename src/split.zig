@@ -1,38 +1,26 @@
 const std = @import("std");
 
-pub fn splitWithDelimiters(
-    allocator: std.mem.Allocator, 
-    text: []const u8, 
-    delimiters: []const []const u8
-) ![][]const u8 {
-    const sorted_delimiters = try allocator.dupe([]const u8, delimiters);
-    defer allocator.free(sorted_delimiters);
-
-    std.mem.sort([]const u8, sorted_delimiters, {}, struct {
-        pub fn lessThan(_: void, a: []const u8, b: []const u8) bool {
-            return a.len > b.len;
-        }
-    }.lessThan);
-
+pub fn splitSpecialTokens(allocator: std.mem.Allocator, text: []const u8, special_tokens: []const []const u8) ![][]const u8 {
     var result = std.ArrayList([]const u8).init(allocator);
     defer result.deinit();
 
+    // mutable view of immutable data i.e. O(1)
+    // meaning that the view is manipulated, not the data
     var current = text;
-
     while (current.len > 0) {
-        var earliest_delimiter: ?[]const u8 = null;
+        var earliest_special_token: ?[]const u8 = null;
         var earliest_index: usize = current.len;
 
-        for (sorted_delimiters) |delimiter| {
-            if (std.mem.indexOf(u8, current, delimiter)) |index| {
+        for (special_tokens) |special_token| {
+            if (std.mem.indexOf(u8, current, special_token)) |index| {
                 if (index < earliest_index) {
-                    earliest_delimiter = delimiter;
+                    earliest_special_token = special_token;
                     earliest_index = index;
                 }
             }
         }
 
-        if (earliest_delimiter == null) {
+        if (earliest_special_token == null) {
             try result.append(current);
             break;
         }
@@ -41,24 +29,25 @@ pub fn splitWithDelimiters(
             try result.append(current[0..earliest_index]);
         }
 
-        try result.append(earliest_delimiter.?);
-        current = current[earliest_index + earliest_delimiter.?.len..];
+        try result.append(earliest_special_token.?);
+        current = current[earliest_index + earliest_special_token.?.len..];
     }
 
     return result.toOwnedSlice();
 }
 
-test "split with delimiters" {
+test "splitSpecialTokens" {
     const testing = std.testing;
     const allocator = testing.allocator;
 
-    const text = "aaCaaABBBcccAAAC";
-    const delimiters = &[_][]const u8{ "A", "BB", "C", "AAA" };
+    // use spaces as special tokens as per e.g. https://huggingface.co/vikhyatk/moondream2/blob/main/tokenizer_config.json
+    const text = "   A  bbbA   ";
+    const special_tokens = &[_][]const u8{ "   ", "  ", " ", "A" };
 
-    const result = try splitWithDelimiters(allocator, text, delimiters);
+    const result = try splitSpecialTokens(allocator, text, special_tokens);
     defer allocator.free(result);
 
-    const expected = &[_][]const u8{ "aa", "C", "aa", "A", "BB", "Bccc", "AAA", "C" };
+    const expected = &[_][]const u8{ "   ", "A", "  ", "bbb", "A", "   " };
 
     try testing.expectEqual(expected.len, result.len);
 

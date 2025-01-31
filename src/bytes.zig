@@ -1,3 +1,5 @@
+// TODO: maybe rename this file to byte-level normalizer as it normalizes
+// the input text using the custom byte-to-unicode method from GPT-2
 const std = @import("std");
 
 pub fn bytesToUnicode(allocator: std.mem.Allocator, input: []const u8) ![]const u8 {

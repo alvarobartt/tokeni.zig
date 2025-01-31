@@ -1,7 +1,7 @@
 const std = @import("std");
 const Regex = @import("regex.zig").Regex;
 const bytesToUnicode = @import("bytes.zig").bytesToUnicode;
-const splitWithDelimiters = @import("split.zig").splitWithDelimiters;
+const splitSpecialTokens = @import("split.zig").splitSpecialTokens;
 
 const Pair = struct {
     left: []const u8,
@@ -29,10 +29,12 @@ pub const Tokenizer = struct {
     merges: std.ArrayList(Pair),
     merges_map: std.HashMap(Pair, u32, PairContext, std.hash_map.default_max_load_percentage),
     regex: Regex,
+    special_tokens: std.ArrayList([]const u8),
     arena: std.heap.ArenaAllocator,
     allocator: std.mem.Allocator,
 
     pub fn init(vocab_path: []const u8, merges_path: []const u8, allocator: std.mem.Allocator) !Tokenizer {
+        // TODO: do we really need the arena
         var arena = std.heap.ArenaAllocator.init(allocator);
         errdefer arena.deinit();
         const aallocator = arena.allocator();
@@ -109,12 +111,17 @@ pub const Tokenizer = struct {
         const regex = Regex.init(allocator);
         errdefer regex.deinit();
 
+        var special_tokens = std.ArrayList([]const u8).init(aallocator);
+        errdefer special_tokens.deinit();
+        try special_tokens.append("<|endoftext|>");
+
         return .{
             .vocab = vocab,
             .vocab_r = vocab_r,
             .merges = merges,
             .merges_map = merges_map,
             .regex = regex,
+            .special_tokens = special_tokens,
             .arena = arena,
             .allocator = allocator,
         };
@@ -136,11 +143,19 @@ pub const Tokenizer = struct {
         defer byte_encoding.deinit();
 
         // TODO: special_tokens needs to be sorted as it has priority, just like the merges
-        const delimiters = &[_][]const u8{ "<|endoftext|>" };
-        const splits = try splitWithDelimiters(self.arena.allocator(), text, delimiters);
+        const splits = try splitSpecialTokens(self.arena.allocator(), text, self.special_tokens.items);
         for (0..splits.len) |idx| {
             const split = try self.arena.allocator().dupe(u8, splits[idx]);
-            if (std.mem.eql(u8, split, "<|endoftext|>")) {
+
+            var is_special_token = false;
+            for (self.special_tokens.items) |special_token| {
+                if (std.mem.eql(u8, split, special_token)) {
+                    is_special_token = true;
+                    break;
+                }
+            }
+
+            if (is_special_token) {
                 try byte_encoding.append(split);
             } else {
                 const split_null_terminated = try self.arena.allocator().dupeZ(u8, split);
@@ -199,14 +214,14 @@ pub const Tokenizer = struct {
                             }
                         }
                     }
-                    if (best_pair_index) |idx| {
-                        const pair = pairs.items[idx];
-                        std.debug.print("Merging: '{s}' + '{s}' (rank {d})\n", .{
-                            pair.left,
-                            pair.right,
-                            best_pair_rank.?
-                        });
-                    }
+                    // if (best_pair_index) |idx| {
+                    //     const pair = pairs.items[idx];
+                    //     std.debug.print("Merging: '{s}' + '{s}' (rank {d})\n", .{
+                    //         pair.left,
+                    //         pair.right,
+                    //         best_pair_rank.?
+                    //     });
+                    // }
 
                     if (best_pair_index == null) break;
 
@@ -236,6 +251,7 @@ pub const Tokenizer = struct {
 
 test "Tokenizer" {
     // https://huggingface.co/openai-community/gpt2/blob/main/vocab.json
+    // https://huggingface.co/openai-community/gpt2/blob/main/merges.txt
     var tokenizer = try Tokenizer.init("vocab.json", "merges.txt", std.testing.allocator);
     defer tokenizer.deinit();
 
