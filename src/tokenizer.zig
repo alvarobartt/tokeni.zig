@@ -1,27 +1,10 @@
 const std = @import("std");
 const Regex = @import("regex.zig").Regex;
-const bytesToUnicode = @import("bytes.zig").bytesToUnicode;
+const encodeBytesToTokens = @import("bytes.zig").encodeBytesToTokens;
 const splitSpecialTokens = @import("split.zig").splitSpecialTokens;
+const Pair = @import("pair.zig").Pair;
+const PairContext = @import("pair.zig").PairContext;
 
-const Pair = struct {
-    left: []const u8,
-    right: []const u8,
-};
-
-const PairContext = struct {
-    pub fn hash(self: @This(), pair: Pair) u64 {
-        _ = self;
-        var hasher = std.hash.Wyhash.init(0);
-        hasher.update(pair.left);
-        hasher.update(pair.right);
-        return hasher.final();
-    }
-
-    pub fn eql(self: @This(), a: Pair, b: Pair) bool {
-        _ = self;
-        return std.mem.eql(u8, a.left, b.left) and std.mem.eql(u8, a.right, b.right);
-    }
-};
 
 pub const Tokenizer = struct {
     vocab: std.StringHashMap(u32),
@@ -163,7 +146,7 @@ pub const Tokenizer = struct {
                 for (matches) |match| {
                     // TODO: most likely redundant, we can keep the code points calculated just
                     // once rather than every time
-                    const match_encoding = try bytesToUnicode(self.arena.allocator(), match);
+                    const match_encoding = try encodeBytesToTokens(self.arena.allocator(), match);
                     try byte_encoding.append(match_encoding);
                 }
             }
