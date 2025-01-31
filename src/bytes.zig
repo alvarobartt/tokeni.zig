@@ -1,52 +1,61 @@
-// TODO: maybe rename this file to byte-level normalizer as it normalizes
-// the input text using the custom byte-to-unicode method from GPT-2
 const std = @import("std");
 
-pub fn bytesToUnicode(allocator: std.mem.Allocator, input: []const u8) ![]const u8 {
-    var code_point: [256]u21 = undefined;
-    var present = [_]bool{false} ** 256;
+const ByteToTokenMapping = struct {
+    byte_to_token_map: [256]u21,
+};
 
-    for (33..127) |b_usize| {
-        const b = @as(u8, @intCast(b_usize));
-        present[b] = true;
-        code_point[b] = b;
+fn initializeByteToTokenMapping() ByteToTokenMapping {
+    var byte_to_token_map: [256]u21 = undefined;
+    var is_byte_mapped = [_]bool{false} ** 256;
+
+    for (33..127) |byte_value| {
+        const byte = @as(u8, @intCast(byte_value));
+        is_byte_mapped[byte] = true;
+        byte_to_token_map[byte] = byte;
     }
-    for (161..173) |b_usize| {
-        const b = @as(u8, @intCast(b_usize));
-        present[b] = true;
-        code_point[b] = b;
+    for (161..173) |byte_value| {
+        const byte = @as(u8, @intCast(byte_value));
+        is_byte_mapped[byte] = true;
+        byte_to_token_map[byte] = byte;
     }
-    for (174..256) |b_usize| {
-        const b = @as(u8, @intCast(b_usize));
-        present[b] = true;
-        code_point[b] = b;
+    for (174..256) |byte_value| {
+        const byte = @as(u8, @intCast(byte_value));
+        is_byte_mapped[byte] = true;
+        byte_to_token_map[byte] = byte;
     }
 
-    var n: u16 = 0;
-    for (0..256) |b_usize| {
-        const b = @as(u8, @intCast(b_usize));
-        if (!present[b]) {
-            code_point[b] = 256 + n;
-            n += 1;
+    var next_token_id: u16 = 0;
+    for (0..256) |byte_value| {
+        const byte = @as(u8, @intCast(byte_value));
+        if (!is_byte_mapped[byte]) {
+            byte_to_token_map[byte] = 256 + next_token_id;
+            next_token_id += 1;
         }
     }
 
-    var buffer = std.ArrayList(u8).init(allocator);
-    defer buffer.deinit();
-
-    for (input) |byte| {
-        const cp = code_point[byte];
-        var utf8_bytes: [4]u8 = undefined;
-        const len = try std.unicode.utf8Encode(cp, &utf8_bytes);
-        try buffer.appendSlice(utf8_bytes[0..len]);
-    }
-
-    return buffer.toOwnedSlice();
+    return ByteToTokenMapping{ .byte_to_token_map = byte_to_token_map };
 }
 
-test "bytesToUnicode" {
-    const output = try bytesToUnicode(std.testing.allocator, "hello world");
+const BYTE_TO_TOKEN_MAPPING = initializeByteToTokenMapping();
+
+pub fn encodeBytesToTokens(allocator: std.mem.Allocator, utf8_input: []const u8) ![]const u8 {
+    var output_buffer = std.ArrayList(u8).init(allocator);
+    defer output_buffer.deinit();
+
+    for (utf8_input) |utf8_byte| {
+        const token_id = BYTE_TO_TOKEN_MAPPING.byte_to_token_map[utf8_byte];
+        var encoded_utf8: [4]u8 = undefined;
+        const encoded_length = try std.unicode.utf8Encode(token_id, &encoded_utf8);
+        try output_buffer.appendSlice(encoded_utf8[0..encoded_length]);
+    }
+
+    return output_buffer.toOwnedSlice();
+}
+
+test "encodeBytesToTokens" {
+    const output = try encodeBytesToTokens(std.testing.allocator, "hello world");
     defer std.testing.allocator.free(output);
 
     try std.testing.expectEqualStrings("helloĠworld", output);
 }
+
