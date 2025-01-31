@@ -17,6 +17,7 @@ pub fn main() !void {
     var tokenizer = try Tokenizer.init(
         "vocab.json",
         "merges.txt",
+        "('s|'t|'re|'ve|'m|'ll|'d| ?[[:alpha:]]+| ?[[:digit:]]+| ?[^[:alnum:][:space:]]+| +[[:space:]]*| +)",
         allocator
     );
     defer tokenizer.deinit();
