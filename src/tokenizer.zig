@@ -17,7 +17,7 @@ pub const Tokenizer = struct {
     special_tokens: std.ArrayList([]const u8),
     allocator: std.mem.Allocator,
 
-    pub fn init(vocab_path: []const u8, merges_path: []const u8, pattern: []const u8, special_tokens: std.ArrayList([]const u8), allocator: std.mem.Allocator) !Tokenizer {
+    pub fn init(vocab_path: []const u8, merges_path: []const u8, pattern: []const u8, special_tokens: std.ArrayList([]const u8), allocator: std.mem.Allocator) !Self {
         var vocab = std.StringHashMap(u32).init(allocator);
         // TODO: maybe this can be pulled from https://huggingface.co/openai-community/gpt2/blob/main/config.json#L30
         try vocab.ensureTotalCapacity(50257);
@@ -98,7 +98,7 @@ pub const Tokenizer = struct {
         };
     }
 
-    pub fn deinit(self: *Tokenizer) void {
+    pub fn deinit(self: *Self) void {
         var vocab_it = self.vocab.iterator();
         while (vocab_it.next()) |entry| {
             self.allocator.free(entry.key_ptr.*);
@@ -116,11 +116,11 @@ pub const Tokenizer = struct {
         self.regex.deinit();
     }
 
-    fn pre(self: *Tokenizer, text: []const u8) ![][]const u8 {
+    fn pre(self: *Self, text: []const u8) ![][]const u8 {
         return try self.regex.findAll(text);
     }
 
-    pub fn encode(self: *Tokenizer, text: []const u8) ![]const u32 {
+    pub fn encode(self: *Self, text: []const u8) ![]const u32 {
         const allocator = self.allocator;
 
         var byte_encoding = std.ArrayList([]const u8).init(allocator);

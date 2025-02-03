@@ -1,5 +1,5 @@
 .{
-    .name = "tokenizig",
+    .name = "tokeni",
     .version = "0.0.1",
     .dependencies = .{},
     .paths = .{
