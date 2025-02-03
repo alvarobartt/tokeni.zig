@@ -2,7 +2,7 @@ const std = @import("std");
 
 pub fn splitSpecialTokens(allocator: std.mem.Allocator, text: []const u8, special_tokens: []const []const u8) ![][]const u8 {
     var result = std.ArrayList([]const u8).init(allocator);
-    defer result.deinit();
+    errdefer result.deinit();
 
     // mutable view of immutable data i.e. O(1)
     // meaning that the view is manipulated, not the data
@@ -37,8 +37,7 @@ pub fn splitSpecialTokens(allocator: std.mem.Allocator, text: []const u8, specia
 }
 
 test "splitSpecialTokens" {
-    const testing = std.testing;
-    const allocator = testing.allocator;
+    const allocator = std.testing.allocator;
 
     // use spaces as special tokens as per e.g. https://huggingface.co/vikhyatk/moondream2/blob/main/tokenizer_config.json
     const text = "   A  bbbA   ";
@@ -48,10 +47,8 @@ test "splitSpecialTokens" {
     defer allocator.free(result);
 
     const expected = &[_][]const u8{ "   ", "A", "  ", "bbb", "A", "   " };
-
-    try testing.expectEqual(expected.len, result.len);
-
+    try std.testing.expectEqual(expected.len, result.len);
     for (expected, 0..) |exp, i| {
-        try testing.expectEqualStrings(exp, result[i]);
+        try std.testing.expectEqualStrings(exp, result[i]);
     }
 }

@@ -7,37 +7,33 @@ const PairContext = @import("pair.zig").PairContext;
 
 
 pub const Tokenizer = struct {
+    const Self = @This();
+
     vocab: std.StringHashMap(u32),
     vocab_r: std.AutoHashMap(u32, []const u8),
     merges: std.ArrayList(Pair),
     merges_map: std.HashMap(Pair, u32, PairContext, std.hash_map.default_max_load_percentage),
     regex: Regex,
     special_tokens: std.ArrayList([]const u8),
-    arena: std.heap.ArenaAllocator,
     allocator: std.mem.Allocator,
 
     pub fn init(vocab_path: []const u8, merges_path: []const u8, pattern: []const u8, special_tokens: std.ArrayList([]const u8), allocator: std.mem.Allocator) !Tokenizer {
-        // TODO: do we really need the arena
-        var arena = std.heap.ArenaAllocator.init(allocator);
-        errdefer arena.deinit();
-        const aallocator = arena.allocator();
-
-        var vocab = std.StringHashMap(u32).init(aallocator);
+        var vocab = std.StringHashMap(u32).init(allocator);
         // TODO: maybe this can be pulled from https://huggingface.co/openai-community/gpt2/blob/main/config.json#L30
         try vocab.ensureTotalCapacity(50257);
         errdefer vocab.deinit();
 
-        var vocab_r = std.AutoHashMap(u32, []const u8).init(aallocator);
+        var vocab_r = std.AutoHashMap(u32, []const u8).init(allocator);
         try vocab_r.ensureTotalCapacity(50257);
         errdefer vocab_r.deinit();
 
         {
             // https://ziglang.org/documentation/master/std/#std.fs
-            const vocab_content = try std.fs.cwd().readFileAlloc(aallocator, vocab_path, 1024 * 1024);
-            defer aallocator.free(vocab_content);
+            const vocab_content = try std.fs.cwd().readFileAlloc(allocator, vocab_path, 1024 * 1024);
+            defer allocator.free(vocab_content);
 
             // https://ziglang.org/documentation/master/std/#std.json
-            var json_tree = try std.json.parseFromSlice(std.json.Value, aallocator, vocab_content, .{});
+            var json_tree = try std.json.parseFromSlice(std.json.Value, allocator, vocab_content, .{});
             defer json_tree.deinit();
 
             const root = json_tree.value;
@@ -47,7 +43,7 @@ pub const Tokenizer = struct {
                     // as the key is a `[]const u8` i.e. not a primitive type, we need
                     // to copy it explicitly as otherwise we're just storing the pointer
                     // which can easily go out of scope and leave the `HashMap` invalid
-                    const key = try aallocator.dupe(u8, entry.key_ptr.*);
+                    const key = try allocator.dupe(u8, entry.key_ptr.*);
                     // on the other hand for primitive types we don't need to explicitly
                     // copy or dupe those, as those have a fixed size and are easy to copy
                     // and move
@@ -58,17 +54,17 @@ pub const Tokenizer = struct {
             }
         }
 
-        var merges = std.ArrayList(Pair).init(aallocator);
+        var merges = std.ArrayList(Pair).init(allocator);
         try merges.ensureTotalCapacity(50000);
         errdefer merges.deinit();
 
-        var merges_map = std.HashMap(Pair, u32, PairContext, std.hash_map.default_max_load_percentage).initContext(aallocator, PairContext{});
+        var merges_map = std.HashMap(Pair, u32, PairContext, std.hash_map.default_max_load_percentage).initContext(allocator, PairContext{});
         try merges_map.ensureTotalCapacity(50000);
         errdefer merges_map.deinit();
 
         {
-            const merges_content = try std.fs.cwd().readFileAlloc(aallocator, merges_path, 1024 * 1024);
-            defer aallocator.free(merges_content);
+            const merges_content = try std.fs.cwd().readFileAlloc(allocator, merges_path, 1024 * 1024);
+            defer allocator.free(merges_content);
 
             var lines = std.mem.tokenize(u8, merges_content, "\n");
             // skip the first line as it contains the `tokenizers` version
@@ -80,8 +76,8 @@ pub const Tokenizer = struct {
                 const left_part = parts.next() orelse continue;
                 const right_part = parts.next() orelse continue;
 
-                const left = try aallocator.dupe(u8, left_part);
-                const right = try aallocator.dupe(u8, right_part);
+                const left = try allocator.dupe(u8, left_part);
+                const right = try allocator.dupe(u8, right_part);
                 try merges.append(.{ .left = left, .right = right });
                 try merges_map.put(.{ .left = left, .right = right }, idx);
                 idx += 1;
@@ -98,14 +94,26 @@ pub const Tokenizer = struct {
             .merges_map = merges_map,
             .regex = regex,
             .special_tokens = special_tokens,
-            .arena = arena,
             .allocator = allocator,
         };
     }
 
-    pub fn deinit(self: Tokenizer) void {
+    pub fn deinit(self: *Tokenizer) void {
+        var vocab_it = self.vocab.iterator();
+        while (vocab_it.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
+        }
+        self.vocab.deinit();
+        self.vocab_r.deinit();
+
+        for (self.merges.items) |merge| {
+            self.allocator.free(merge.left);
+            self.allocator.free(merge.right);
+        }
+        self.merges.deinit();
+        self.merges_map.deinit();
+
         self.regex.deinit();
-        self.arena.deinit();
     }
 
     fn pre(self: *Tokenizer, text: []const u8) ![][]const u8 {
@@ -113,107 +121,129 @@ pub const Tokenizer = struct {
     }
 
     pub fn encode(self: *Tokenizer, text: []const u8) ![]const u32 {
-        var byte_encoding = std.ArrayList([]const u8).init(self.arena.allocator());
-        defer byte_encoding.deinit();
+        const allocator = self.allocator;
 
-        const splits = try splitSpecialTokens(self.arena.allocator(), text, self.special_tokens.items);
-        for (0..splits.len) |idx| {
-            const split = try self.arena.allocator().dupe(u8, splits[idx]);
+        var byte_encoding = std.ArrayList([]const u8).init(allocator);
+        defer {
+            for (byte_encoding.items) |item| allocator.free(item);
+            byte_encoding.deinit();
+        }
 
-            var is_special_token = false;
-            for (self.special_tokens.items) |special_token| {
-                if (std.mem.eql(u8, split, special_token)) {
-                    is_special_token = true;
-                    break;
+        const splits = try splitSpecialTokens(allocator, text, self.special_tokens.items);
+        defer allocator.free(splits);
+
+        for (splits) |split| {
+            const is_special_token = blk: {
+                for (self.special_tokens.items) |special| {
+                    if (std.mem.eql(u8, split, special)) break :blk true;
                 }
-            }
+                break :blk false;
+            };
 
             if (is_special_token) {
-                try byte_encoding.append(split);
+                const owned = try allocator.dupe(u8, split);
+                try byte_encoding.append(owned);
             } else {
-                const split_null_terminated = try self.arena.allocator().dupeZ(u8, split);
-                const matches = try self.pre(split_null_terminated);
+                const split_z = try allocator.dupeZ(u8, split);
+                defer allocator.free(split_z);
+                
+                const matches = try self.pre(split_z);
+                defer {
+                    for (matches) |m| allocator.free(m);
+                    allocator.free(matches);
+                }
+                
                 for (matches) |match| {
-                    const match_encoding = try encodeBytesToTokens(self.arena.allocator(), match);
+                    const owned_match = try allocator.dupe(u8, match);
+                    defer allocator.free(owned_match);
+
+                    const match_encoding = try encodeBytesToTokens(allocator, owned_match);
                     try byte_encoding.append(match_encoding);
                 }
             }
         }
 
-        var text_encoding = std.ArrayList(u32).init(self.arena.allocator());
-        defer text_encoding.deinit();
+        var text_encoding = std.ArrayList(u32).init(allocator);
+        errdefer text_encoding.deinit();
 
         for (byte_encoding.items) |encoding| {
-            if (self.vocab.get(encoding)) |v| {
-                try text_encoding.append(v);
-            } else {
-                var code_points = std.ArrayList([]const u8).init(self.arena.allocator());
-                defer code_points.deinit();
+            if (self.vocab.get(encoding)) |id| {
+                try text_encoding.append(id);
+                continue;
+            }
 
-                // split each token into individual unicode code points
-                var window: usize = 0;
-                while (window < encoding.len) {
-                    // for ascii returns 1, but for bytes as e.g. `Ġ` the unicode code
-                    // point takes 2 bytes in utf-8 (indeed utf-8 characters can be 1-4
-                    // bytes)
-                    const code_point_length = std.unicode.utf8ByteSequenceLength(encoding[window]) catch {
-                        return error.InvalidByteEncoding;
+            var code_points = std.ArrayList([]const u8).init(allocator);
+            defer {
+                for (code_points.items) |code_point| allocator.free(code_point);
+                code_points.deinit();
+            }
+
+            // split each token into individual unicode code points
+            var pos: usize = 0;
+            while (pos < encoding.len) {
+                // for ascii returns 1, but for bytes as e.g. `Ġ` the unicode code
+                // point takes 2 bytes in utf-8 (indeed utf-8 characters can be 1-4
+                // bytes)
+                const len = std.unicode.utf8ByteSequenceLength(encoding[pos]) catch {
+                    return error.InvalidUtf8;
+                };
+                // prevents reading past the end of the buffer
+                if (pos + len > encoding.len) return error.InvalidUtf8;
+                
+                const code_point = try allocator.dupe(u8, encoding[pos..pos+len]);
+                try code_points.append(code_point);
+                pos += len;
+            }
+
+            while (code_points.items.len > 1) {
+                var best_idx: ?usize = null;
+                var best_rank: u32 = std.math.maxInt(u32);
+                
+                for (0..code_points.items.len - 1) |i| {
+                    const pair = Pair{
+                        .left = code_points.items[i],
+                        .right = code_points.items[i+1]
                     };
-                    // prevents reading past the end of the buffer
-                    if (window + code_point_length > encoding.len) return error.InvalidSplit;
-
-                    const code_point = encoding[window..window+code_point_length];
-                    window += code_point_length;
-                    try code_points.append(code_point);
-                }
-
-                while (code_points.items.len > 1) {
-                    var pairs = std.ArrayList(Pair).init(self.arena.allocator());
-                    defer pairs.deinit();
-
-                    for (0..code_points.items.len - 1) |i| {
-                        try pairs.append(.{ .left = code_points.items[i], .right = code_points.items[i + 1] });
-                    }
-
-                    var best_pair_index: ?usize = null;
-                    var best_pair_rank: ?u32 = null;
-                    for (pairs.items, 0..) |pair, idx| {
-                        if (self.merges_map.get(pair)) |rank| {
-                            if (best_pair_rank == null or rank < best_pair_rank.?) {
-                                best_pair_rank = rank;
-                                best_pair_index = idx;
-                            }
+                    
+                    if (self.merges_map.get(pair)) |rank| {
+                        if (rank < best_rank) {
+                            best_rank = rank;
+                            best_idx = i;
                         }
                     }
-
-                    if (best_pair_index == null) break;
-
-                    const merge_idx = best_pair_index.?;
-                    const merged_token_len = code_points.items[merge_idx].len + code_points.items[merge_idx + 1].len;
-                    const merged_token = try self.arena.allocator().alloc(u8, merged_token_len);
-
-                    std.mem.copyForwards(u8, merged_token[0..code_points.items[merge_idx].len], code_points.items[merge_idx]);
-                    std.mem.copyForwards(u8, merged_token[code_points.items[merge_idx].len..], code_points.items[merge_idx + 1]);
-
-                    code_points.items[merge_idx] = merged_token;
-                    _ = code_points.orderedRemove(merge_idx + 1);
                 }
 
-                for (code_points.items) |token| {
-                    if (self.vocab.get(token)) |vocab_id| {
-                        try text_encoding.append(vocab_id);
-                    } else {
-                        return error.TokenNotInVocab;
-                    }
-                }
+                const merge_idx = best_idx orelse break;
+
+                const merged_pair = try allocator.alloc(u8, 
+                    code_points.items[merge_idx].len + code_points.items[merge_idx+1].len
+                );
+
+                std.mem.copyForwards(u8, merged_pair[0..code_points.items[merge_idx].len], code_points.items[merge_idx]);
+                std.mem.copyForwards(u8, merged_pair[code_points.items[merge_idx].len..], code_points.items[merge_idx+1]);
+
+                allocator.free(code_points.items[merge_idx]);
+                allocator.free(code_points.items[merge_idx+1]);
+
+                code_points.items[merge_idx] = merged_pair;
+                _ = code_points.orderedRemove(merge_idx+1);
+            }
+
+            for (code_points.items) |token| {
+                try text_encoding.append(
+                    self.vocab.get(token) orelse return error.TokenNotInVocab
+                );
             }
         }
+
         return text_encoding.toOwnedSlice();
     }
 };
 
 test "Tokenizer" {
-    var special_tokens = std.ArrayList([]const u8).init(std.testing.allocator);
+    const allocator = std.testing.allocator;
+
+    var special_tokens = std.ArrayList([]const u8).init(allocator);
     defer special_tokens.deinit();
     try special_tokens.append("<|endoftext|>");
 
@@ -224,9 +254,8 @@ test "Tokenizer" {
         "merges.txt",
         "('s|'t|'re|'ve|'m|'ll|'d| ?[[:alpha:]]+| ?[[:digit:]]+| ?[^[:alnum:][:space:]]+| +[[:space:]]*| +)",
         special_tokens,
-        std.testing.allocator,
+        allocator,
     );
-
     defer tokenizer.deinit();
 
     try std.testing.expectEqual(@as(u32, 50257), tokenizer.vocab.count());
@@ -235,8 +264,10 @@ test "Tokenizer" {
     try std.testing.expect(std.mem.eql(u8, tokenizer.vocab_r.get(@as(u32, 50256)).?, "<|endoftext|>"));
 
     const text = "Hello, I'm a test string with numbers 123 and symbols @#$!<|endoftext|>";
-    const encoded_text = try tokenizer.encode(text);
-    try std.testing.expectEqualSlices(u32, encoded_text, &[_]u32{
+    const encoding = try tokenizer.encode(text);
+    defer tokenizer.allocator.free(encoding);
+
+    try std.testing.expectEqualSlices(u32, encoding, &[_]u32{
         15496, 11, 314, 1101, 257, 1332, 4731, 351,
         3146, 17031, 290, 14354, 2488, 29953, 0, 50256
     });

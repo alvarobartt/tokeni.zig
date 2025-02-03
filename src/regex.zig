@@ -4,45 +4,51 @@ const c = @cImport({
 });
 
 pub const Regex = struct {
-    arena: std.heap.ArenaAllocator,
+    const Self = @This();
+
+    allocator: std.mem.Allocator,
     regex: c.regex_t,
 
-    pub fn init(allocator: std.mem.Allocator, pattern: []const u8) !Regex {
-        var arena = std.heap.ArenaAllocator.init(allocator);
-
+    pub fn init(allocator: std.mem.Allocator, pattern: []const u8) !Self {
         // https://www.gnu.org/software/libc/manual/html_node/POSIX-Regexp-Compilation.html#index-regex_005ft
         var regex: c.regex_t = undefined;
         // https://www.gnu.org/software/libc/manual/html_node/POSIX-Regexp-Compilation.html#index-regcomp
         // https://www.gnu.org/software/libc/manual/html_node/Flags-for-POSIX-Regexps.html#index-REG_005fEXTENDED
         const compile_result = c.regcomp(&regex, pattern.ptr, c.REG_EXTENDED);
         if (compile_result != 0) {
-            arena.deinit();
             return error.RegexCompilationFailed;
         }
 
-        return Regex{
-            .arena = arena,
+        return Self{
+            .allocator = allocator,
             .regex = regex,
         };
     }
 
-    pub fn deinit(self: Regex) void {
+    pub fn deinit(self: Self) void {
         // https://www.gnu.org/software/libc/manual/html_node/Regexp-Cleanup.html#index-regfree
         c.regfree(@constCast(&self.regex));
-        self.arena.deinit();
     }
 
-    pub fn findAll(self: *Regex, text: []const u8) ![][]const u8 {
+    pub fn findAll(self: *Self, text: []const u8) ![][]const u8 {
+        const allocator = self.allocator;
+
+        var buffer: ?[]u8 = null;
+        defer if (buffer) |b| allocator.free(b);
+
         // c expects null-terminated strings so this is just an additional harmless check
-        const text_null_terminated: []const u8 = if (text.len == 0 or text[text.len - 1] != 0) block: {
-            var buffer = try self.arena.allocator().alloc(u8, text.len + 1);
-            std.mem.copyForwards(u8, buffer[0..text.len], text);
-            buffer[text.len] = 0;
-            break :block buffer;
+        const text_null_terminated = if (text.len == 0 or text[text.len - 1] != 0) blk: {
+            buffer = try allocator.alloc(u8, text.len + 1);
+            std.mem.copyForwards(u8, buffer.?[0..text.len], text);
+            buffer.?[text.len] = 0;
+            break :blk buffer.?;
         } else text;
 
-        var matches = std.ArrayList([]const u8).init(self.arena.allocator());
-        errdefer matches.deinit();
+        var matches = std.ArrayList([]const u8).init(allocator);
+        errdefer {
+            for (matches.items) |m| allocator.free(m);
+            matches.deinit();
+        }
 
         var offset: usize = 0;
         while (offset < text.len) {
@@ -55,8 +61,11 @@ pub const Regex = struct {
 
             const start = offset + @as(usize, @intCast(pmatch[0].rm_so));
             const end = offset + @as(usize, @intCast(pmatch[0].rm_eo));
-            try matches.append(text_null_terminated[start..end]);
 
+            const match_text = try allocator.dupe(u8, text_null_terminated[start..end]);
+            errdefer allocator.free(match_text);
+
+            try matches.append(match_text);
             offset = end;
         }
 
@@ -74,6 +83,10 @@ test "Regex.findAll" {
 
     const text = "Hello, I'm a test string with numbers 123 and symbols @#$!";
     const matches = try regex.findAll(text);
+    defer {
+        for (matches) |m| allocator.free(m);
+        allocator.free(matches);
+    }
 
     try std.testing.expectEqual(@as(usize, 13), matches.len);
     try std.testing.expectEqualStrings("Hello", matches[0]);
