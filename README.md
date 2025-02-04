@@ -5,45 +5,27 @@ Pair Encoding (BPE) tokenizer in Zig.
 
 > [!WARNING]
 > This implementation is currently a learning project for exploring Zig and
-> tokenizer internals (particularly BPE used in models like e.g. DeepSeek R1).
+> tokenizer internals (particularly BPE used in models like e.g. GPT-2).
 > Expect rough edges, contributions are more than welcomed!
-
-## Installation (not released yet)
-
-Requires Zig 0.13.0+. Add to your `build.zig.zon`:
-
-```zig
-.dependencies = .{
-    .tokeni = .{
-        .url = "https://github.com/alvarobartt/tokeni.zig/archive/refs/tags/v0.0.1.tar.gz",
-        .hash = "[PACKAGE_HASH]",
-    },
-},
-```
-
-And then `git submodule add https://github.com/alvarobartt/tokeni.zig libs/tokeni`.
-
-For other platforms or build setups, refer to [Zig Build System](https://ziglang.org/learn/build-system/).
 
 ## Usage
 
-> [!NOTE]
+> [!WARNING]
 > It has been just tested for GPT-2's tokenizer, and there's probably a lot of
 > room for improvement (and that will come soon), for the moment assume that's just
 > valid / working fine for GPT-2 until further notice.
 
-First you need to download the tokenizer-related files (`vocab.json`, `merges.txt`,
-and `tokenizer_config.json`) from the Hugging Face Hub at
-[`openai-community/gpt2`](https://huggingface.co/openai-community/gpt2).
+First you need to download the tokenizer-related files (`vocab.json` and `merges.txt`)
+from the Hugging Face Hub at [`openai-community/gpt2`](https://huggingface.co/openai-community/gpt2).
 
 ```zig
 const std = @import("std");
 const tokeni = @import("tokeni");
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
 
     var special_tokens = std.ArrayList([]const u8).init(allocator);
     defer special_tokens.deinit();
