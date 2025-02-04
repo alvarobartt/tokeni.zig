@@ -52,10 +52,51 @@ pub fn encodeBytesToTokens(allocator: std.mem.Allocator, utf8_input: []const u8)
     return output_buffer.toOwnedSlice();
 }
 
+const TokenToByteMapping = struct {
+    token_to_byte: [324]u8,
+};
+
+fn initializeTokenToByteMapping() TokenToByteMapping {
+    var token_to_byte: [324]u8 = undefined;
+
+    for (0..256) |byte_value| {
+        const byte = @as(u8, @intCast(byte_value));
+        const token_id = BYTE_TO_TOKEN_MAPPING.byte_to_token_map[byte];
+        token_to_byte[token_id] = byte;
+    }
+
+    return TokenToByteMapping{ .token_to_byte = token_to_byte };
+}
+
+const TOKEN_TO_BYTE = initializeTokenToByteMapping();
+
+pub fn decodeTokensToBytes(allocator: std.mem.Allocator, encoded: []const u8) ![]const u8 {
+    var output = std.ArrayList(u8).init(allocator);
+    errdefer output.deinit();
+
+    var utf8_view = try std.unicode.Utf8View.init(encoded);
+    var iter = utf8_view.iterator();
+
+    while (iter.nextCodepoint()) |codepoint| {
+        const byte = TOKEN_TO_BYTE.token_to_byte[@as(usize, codepoint)];
+        try output.append(byte);
+    }
+
+    return output.toOwnedSlice();
+}
+
 test "encodeBytesToTokens" {
     const allocator = std.testing.allocator;
 
     const output = try encodeBytesToTokens(allocator, "hello world");
     defer allocator.free(output);
     try std.testing.expectEqualStrings("helloĠworld", output);
+}
+
+test "decodeTokensToBytes" {
+    const allocator = std.testing.allocator;
+
+    const input = try decodeTokensToBytes(allocator, "helloĠworld");
+    defer allocator.free(input);
+    try std.testing.expectEqualStrings("hello world", input);
 }

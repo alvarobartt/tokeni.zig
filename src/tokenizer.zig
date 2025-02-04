@@ -4,6 +4,7 @@ const encodeBytesToTokens = @import("bytes.zig").encodeBytesToTokens;
 const splitSpecialTokens = @import("split.zig").splitSpecialTokens;
 const Pair = @import("pair.zig").Pair;
 const PairContext = @import("pair.zig").PairContext;
+const decodeTokensToBytes = @import("bytes.zig").decodeTokensToBytes;
 
 
 pub const Tokenizer = struct {
@@ -238,6 +239,25 @@ pub const Tokenizer = struct {
 
         return text_encoding.toOwnedSlice();
     }
+
+    pub fn decode(self: Self, input_ids: []const u32) ![]const u8 {
+        var buffer = std.ArrayList(u8).init(self.allocator);
+        errdefer buffer.deinit();
+
+        for (input_ids) |id| {
+            const token = self.vocab_r.get(id) orelse return error.InvalidTokenId;
+            // token is not a single token per se e.g. ĠI, can be a token, but we
+            // need to split the different unicode characters being Ġ taking 2 bytes
+            // in this case and I taking 1 byte; then for Ġ we should check the reversed
+            // mapping TOKEN_TO_BYTES_MAPPING that will produce a UTF-8 byte that we can
+            // convert to its string value and append the slice into the buffer
+            const decoded = try decodeTokensToBytes(self.allocator, token);
+            defer self.allocator.free(decoded);
+
+            try buffer.appendSlice(decoded);
+        }
+        return buffer.toOwnedSlice();
+    }
 };
 
 test "Tokenizer" {
@@ -271,4 +291,9 @@ test "Tokenizer" {
         15496, 11, 314, 1101, 257, 1332, 4731, 351,
         3146, 17031, 290, 14354, 2488, 29953, 0, 50256
     });
+
+    const decoding = try tokenizer.decode(encoding);
+    defer tokenizer.allocator.free(decoding);
+
+    try std.testing.expectEqualStrings(text, decoding);
 }
