@@ -8,7 +8,7 @@ Pair Encoding (BPE) tokenizer in Zig.
 > tokenizer internals (particularly BPE used in models like e.g. DeepSeek R1).
 > Expect rough edges, contributions are more than welcomed!
 
-## Installation
+## Installation (not released yet)
 
 Requires Zig 0.13.0+. Add to your `build.zig.zon`:
 
