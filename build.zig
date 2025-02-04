@@ -23,6 +23,16 @@ pub fn build(b: *std.Build) void {
 
     const run_tests = b.addRunArtifact(tests);
 
-    const test_step = b.step("test", "Run library tests");
+    const test_step = b.step("test", "run tokeni.zig tests");
     test_step.dependOn(&run_tests.step);
+
+    const exe = b.addExecutable(.{
+        .name = "tokeni-cli",
+        .root_source_file = b.path("src/main.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    exe.linkLibrary(lib);
+    exe.linkLibC();
+    b.installArtifact(exe);
 }
