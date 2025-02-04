@@ -1,11 +1,16 @@
+// TODO: a bunch of potential improvements here, among those adding a `from_pretrained`
+// like method to avoid having to pull the files locally, and improved special_token
+// detection, among many other improvements such as extending the tests or adding
+// actual documentation based on Zig standards rather than just code comments here
+// and there
+
 const std = @import("std");
 const Regex = @import("regex.zig").Regex;
-const encodeBytesToTokens = @import("bytes.zig").encodeBytesToTokens;
 const splitSpecialTokens = @import("split.zig").splitSpecialTokens;
 const Pair = @import("pair.zig").Pair;
 const PairContext = @import("pair.zig").PairContext;
-const decodeTokensToBytes = @import("bytes.zig").decodeTokensToBytes;
-
+const bytesToTokens = @import("byte_encoding.zig").bytesToTokens;
+const tokensToBytes = @import("byte_decoding.zig").tokensToBytes;
 
 pub const Tokenizer = struct {
     const Self = @This();
@@ -117,6 +122,9 @@ pub const Tokenizer = struct {
         self.regex.deinit();
     }
 
+    // TODO: here just temporarily in case we want to debug the pretokenizer
+    // itself, to be later on renamed to pretokenize_str or something closer to
+    // the Rust counterpart
     fn pre(self: *Self, text: []const u8) ![][]const u8 {
         return try self.regex.findAll(text);
     }
@@ -130,6 +138,10 @@ pub const Tokenizer = struct {
             byte_encoding.deinit();
         }
 
+        // TODO: I'm highly confident that the special token discovery can be
+        // highly improved as now it feels that we discover those and separate
+        // those from the rest, and then we loop over the splits again and try 
+        // to check which out of the existing special token it is (if any)
         const splits = try splitSpecialTokens(allocator, text, self.special_tokens.items);
         defer allocator.free(splits);
 
@@ -158,11 +170,12 @@ pub const Tokenizer = struct {
                     const owned_match = try allocator.dupe(u8, match);
                     defer allocator.free(owned_match);
 
-                    const match_encoding = try encodeBytesToTokens(allocator, owned_match);
+                    const match_encoding = try bytesToTokens(allocator, owned_match);
                     try byte_encoding.append(match_encoding);
                 }
             }
         }
+        // TODO(follow-up): until here should be improved for sure!
 
         var text_encoding = std.ArrayList(u32).init(allocator);
         errdefer text_encoding.deinit();
@@ -246,12 +259,11 @@ pub const Tokenizer = struct {
 
         for (input_ids) |id| {
             const token = self.vocab_r.get(id) orelse return error.InvalidTokenId;
-            // token is not a single token per se e.g. ĠI, can be a token, but we
-            // need to split the different unicode characters being Ġ taking 2 bytes
-            // in this case and I taking 1 byte; then for Ġ we should check the reversed
-            // mapping TOKEN_TO_BYTES_MAPPING that will produce a UTF-8 byte that we can
-            // convert to its string value and append the slice into the buffer
-            const decoded = try decodeTokensToBytes(self.allocator, token);
+            // token is not a single token per se e.g. "ĠI", can be a token, but we
+            // need to split the different unicode characters being "Ġ" taking 2 bytes
+            // in this case and "I" taking 1 byte; then for "Ġ" we should check the reversed
+            // mapping actual UTF-8 value and append it into the buffer
+            const decoded = try tokensToBytes(self.allocator, token);
             defer self.allocator.free(decoded);
 
             try buffer.appendSlice(decoded);
@@ -263,6 +275,7 @@ pub const Tokenizer = struct {
 test "Tokenizer" {
     const allocator = std.testing.allocator;
 
+    // TODO: special token initialization can also be read from the `tokenizer_config.json`
     var special_tokens = std.ArrayList([]const u8).init(allocator);
     defer special_tokens.deinit();
     try special_tokens.append("<|endoftext|>");

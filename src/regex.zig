@@ -37,6 +37,8 @@ pub const Regex = struct {
         defer if (buffer) |b| allocator.free(b);
 
         // c expects null-terminated strings so this is just an additional harmless check
+        // as a side-note, when creating string splits we can just dupe those using dupeZ instead
+        // which allocates another byte to store the null-terminator i.e. the last 0
         const text_null_terminated = if (text.len == 0 or text[text.len - 1] != 0) blk: {
             buffer = try allocator.alloc(u8, text.len + 1);
             std.mem.copyForwards(u8, buffer.?[0..text.len], text);
@@ -78,6 +80,7 @@ test "Regex.findAll" {
 
     // https://github.com/openai/gpt-2/blob/9b63575ef42771a015060c964af2c3da4cf7c8ab/src/encoder.py#L53
     const pattern = "('s|'t|'re|'ve|'m|'ll|'d| ?[[:alpha:]]+| ?[[:digit:]]+| ?[^[:alnum:][:space:]]+| +[[:space:]]*| +)";
+
     var regex = try Regex.init(allocator, pattern);
     defer regex.deinit();
 
