@@ -10,11 +10,6 @@ Pair Encoding (BPE) tokenizer in Zig.
 
 ## Usage
 
-> [!WARNING]
-> It has been just tested for GPT-2's tokenizer, and there's probably a lot of
-> room for improvement (and that will come soon), for the moment assume that's just
-> valid / working fine for GPT-2 until further notice.
-
 First you need to download the tokenizer-related files (`vocab.json` and `merges.txt`)
 from the Hugging Face Hub at [`openai-community/gpt2`](https://huggingface.co/openai-community/gpt2).
 
