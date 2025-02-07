@@ -135,10 +135,7 @@ pub const Tokenizer = struct {
         self.regex.deinit();
     }
 
-    // TODO: here just temporarily in case we want to debug the pretokenizer
-    // itself, to be later on renamed to pretokenize_str or something closer to
-    // the Rust counterpart
-    fn pre(self: *Self, text: []const u8) ![][]const u8 {
+    fn pre_tokenize_str(self: *Self, text: []const u8) ![][]const u8 {
         return try self.regex.findAll(text);
     }
 
@@ -173,7 +170,7 @@ pub const Tokenizer = struct {
                 const split_z = try allocator.dupeZ(u8, split);
                 defer allocator.free(split_z);
                 
-                const matches = try self.pre(split_z);
+                const matches = try self.pre_tokenize_str(split_z);
                 defer {
                     for (matches) |m| allocator.free(m);
                     allocator.free(matches);
