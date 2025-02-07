@@ -6,7 +6,6 @@
 
 const std = @import("std");
 const Regex = @import("regex.zig").Regex;
-const splitSpecialTokens = @import("split.zig").splitSpecialTokens;
 const Pair = @import("pair.zig").Pair;
 const PairContext = @import("pair.zig").PairContext;
 const bytesToTokens = @import("byte_encoding.zig").bytesToTokens;
@@ -148,26 +147,36 @@ pub const Tokenizer = struct {
             byte_encoding.deinit();
         }
 
-        // TODO: I'm highly confident that the special token discovery can be
-        // highly improved as now it feels that we discover those and separate
-        // those from the rest, and then we loop over the splits again and try 
-        // to check which out of the existing special token it is (if any)
-        const splits = try splitSpecialTokens(allocator, text, self.special_tokens.items);
-        defer allocator.free(splits);
+        // mutable view of immutable data i.e. O(1)
+        // meaning that the view is manipulated, not the data
+        var current = text;
+        while (current.len > 0) {
+            var earliest_special_token: ?[]const u8 = null;
+            var earliest_index: usize = current.len;
 
-        for (splits) |split| {
-            const is_special_token = blk: {
-                for (self.special_tokens.items) |special| {
-                    if (std.mem.eql(u8, split, special)) break :blk true;
+            // loops in order over the provided special tokens and keeps the first
+            // special token that's encountered, as it's ordered, assuming that the
+            // overlapping sequences are defined in decreasing order of text length,
+            // then the earliest in the string will also be the longest if possible,
+            // so the next overlapping ones won't match the `index < earliest_index`
+            // condition
+            for (self.special_tokens.items) |special_token| {
+                // index here is the starting index of the special token so that the
+                // part we need to split is `index + special_token.len`
+                if (std.mem.indexOf(u8, current, special_token)) |index| {
+                    if (index < earliest_index) {
+                        earliest_special_token = special_token;
+                        earliest_index = index;
+                    }
                 }
-                break :blk false;
-            };
+            }
 
-            if (is_special_token) {
-                const owned = try allocator.dupe(u8, split);
-                try byte_encoding.append(owned);
-            } else {
-                const split_z = try allocator.dupeZ(u8, split);
+            // either if there are no special tokens in the provided text or if
+            // if there is text that's not part of the special token i.e. there is
+            // text before the special token
+            if (earliest_special_token == null or earliest_index > 0) {
+                const text_without_special_tokens = if (earliest_index > 0) current[0..earliest_index] else current;
+                const split_z = try allocator.dupeZ(u8, text_without_special_tokens);
                 defer allocator.free(split_z);
                 
                 const matches = try self.pre_tokenize_str(split_z);
@@ -184,8 +193,20 @@ pub const Tokenizer = struct {
                     try byte_encoding.append(match_encoding);
                 }
             }
+
+            // if there are no more special tokens, then just break the loop
+            if (earliest_special_token == null) {
+                break;
+            }
+
+            // then append the special token to the result, and update the current
+            // value with the remainder of the text
+            const special_token = try allocator.dupe(u8, earliest_special_token.?);
+            errdefer allocator.free(special_token);
+
+            try byte_encoding.append(special_token);
+            current = current[earliest_index + earliest_special_token.?.len..];
         }
-        // TODO(follow-up): until here should be improved for sure!
 
         var text_encoding = std.ArrayList(u21).init(allocator);
         errdefer text_encoding.deinit();
@@ -222,13 +243,13 @@ pub const Tokenizer = struct {
             while (code_points.items.len > 1) {
                 var best_idx: ?usize = null;
                 var best_rank: u21 = std.math.maxInt(u21);
-                
+
                 for (0..code_points.items.len - 1) |i| {
                     const pair = Pair{
                         .left = code_points.items[i],
                         .right = code_points.items[i+1]
                     };
-                    
+
                     if (self.merges_map.get(pair)) |rank| {
                         if (rank < best_rank) {
                             best_rank = rank;
