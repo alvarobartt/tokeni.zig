@@ -14,17 +14,7 @@ pub fn main() !void {
         return error.MissingFilePath;
     }
 
-    var special_tokens = std.ArrayList([]const u8).init(allocator);
-    defer special_tokens.deinit();
-    try special_tokens.append("<|endoftext|>");
-
-    var tokenizer = try Tokenizer.init(
-        "vocab.json",
-        "merges.txt",
-        "('s|'t|'re|'ve|'m|'ll|'d| ?[[:alpha:]]+| ?[[:digit:]]+| ?[^[:alnum:][:space:]]+| +[[:space:]]*| +)",
-        special_tokens,
-        allocator
-    );
+    var tokenizer = try Tokenizer.init("tokenizer.json", allocator);
     defer tokenizer.deinit();
 
     const input_file = try std.fs.cwd().openFile(args[1], .{});
