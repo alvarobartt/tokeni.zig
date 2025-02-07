@@ -15,21 +15,21 @@ const tokensToBytes = @import("byte_decoding.zig").tokensToBytes;
 pub const Tokenizer = struct {
     const Self = @This();
 
-    vocab: std.StringHashMap(u32),
-    vocab_r: std.AutoHashMap(u32, []const u8),
+    vocab: std.StringHashMap(u21),
+    vocab_r: std.AutoHashMap(u21, []const u8),
     merges: std.ArrayList(Pair),
-    merges_map: std.HashMap(Pair, u32, PairContext, std.hash_map.default_max_load_percentage),
+    merges_map: std.HashMap(Pair, u21, PairContext, std.hash_map.default_max_load_percentage),
     regex: Regex,
     special_tokens: std.ArrayList([]const u8),
     allocator: std.mem.Allocator,
 
     pub fn init(vocab_path: []const u8, merges_path: []const u8, pattern: []const u8, special_tokens: std.ArrayList([]const u8), allocator: std.mem.Allocator) !Self {
-        var vocab = std.StringHashMap(u32).init(allocator);
+        var vocab = std.StringHashMap(u21).init(allocator);
         // TODO: maybe this can be pulled from https://huggingface.co/openai-community/gpt2/blob/main/config.json#L30
         try vocab.ensureTotalCapacity(50257);
         errdefer vocab.deinit();
 
-        var vocab_r = std.AutoHashMap(u32, []const u8).init(allocator);
+        var vocab_r = std.AutoHashMap(u21, []const u8).init(allocator);
         try vocab_r.ensureTotalCapacity(50257);
         errdefer vocab_r.deinit();
 
@@ -53,7 +53,7 @@ pub const Tokenizer = struct {
                     // on the other hand for primitive types we don't need to explicitly
                     // copy or dupe those, as those have a fixed size and are easy to copy
                     // and move
-                    const value = @as(u32, @intCast(entry.value_ptr.*.integer));
+                    const value = @as(u21, @intCast(entry.value_ptr.*.integer));
                     try vocab.put(key, value);
                     try vocab_r.put(value, key);
                 }
@@ -64,7 +64,7 @@ pub const Tokenizer = struct {
         try merges.ensureTotalCapacity(50000);
         errdefer merges.deinit();
 
-        var merges_map = std.HashMap(Pair, u32, PairContext, std.hash_map.default_max_load_percentage).initContext(allocator, PairContext{});
+        var merges_map = std.HashMap(Pair, u21, PairContext, std.hash_map.default_max_load_percentage).initContext(allocator, PairContext{});
         try merges_map.ensureTotalCapacity(50000);
         errdefer merges_map.deinit();
 
@@ -76,7 +76,7 @@ pub const Tokenizer = struct {
             // skip the first line as it contains the `tokenizers` version
             // e.g. `#version: 0.2`
             _ = lines.next();
-            var idx: u32 = 0;
+            var idx: u21 = 0;
             while (lines.next()) |line| {
                 var parts = std.mem.tokenize(u8, line, " ");
                 const left_part = parts.next() orelse continue;
@@ -129,7 +129,7 @@ pub const Tokenizer = struct {
         return try self.regex.findAll(text);
     }
 
-    pub fn encode(self: *Self, text: []const u8) ![]const u32 {
+    pub fn encode(self: *Self, text: []const u8) ![]const u21 {
         const allocator = self.allocator;
 
         var byte_encoding = std.ArrayList([]const u8).init(allocator);
@@ -177,7 +177,7 @@ pub const Tokenizer = struct {
         }
         // TODO(follow-up): until here should be improved for sure!
 
-        var text_encoding = std.ArrayList(u32).init(allocator);
+        var text_encoding = std.ArrayList(u21).init(allocator);
         errdefer text_encoding.deinit();
 
         for (byte_encoding.items) |encoding| {
@@ -211,7 +211,7 @@ pub const Tokenizer = struct {
 
             while (code_points.items.len > 1) {
                 var best_idx: ?usize = null;
-                var best_rank: u32 = std.math.maxInt(u32);
+                var best_rank: u21 = std.math.maxInt(u21);
                 
                 for (0..code_points.items.len - 1) |i| {
                     const pair = Pair{
@@ -253,7 +253,7 @@ pub const Tokenizer = struct {
         return text_encoding.toOwnedSlice();
     }
 
-    pub fn decode(self: Self, input_ids: []const u32) ![]const u8 {
+    pub fn decode(self: Self, input_ids: []const u21) ![]const u8 {
         var buffer = std.ArrayList(u8).init(self.allocator);
         errdefer buffer.deinit();
 
@@ -291,16 +291,16 @@ test "Tokenizer" {
     );
     defer tokenizer.deinit();
 
-    try std.testing.expectEqual(@as(u32, 50257), tokenizer.vocab.count());
+    try std.testing.expectEqual(@as(u21, 50257), tokenizer.vocab.count());
     try std.testing.expect(tokenizer.vocab.contains("<|endoftext|>"));
-    try std.testing.expectEqual(@as(u32, 50257), tokenizer.vocab_r.count());
-    try std.testing.expect(std.mem.eql(u8, tokenizer.vocab_r.get(@as(u32, 50256)).?, "<|endoftext|>"));
+    try std.testing.expectEqual(@as(u21, 50257), tokenizer.vocab_r.count());
+    try std.testing.expect(std.mem.eql(u8, tokenizer.vocab_r.get(@as(u21, 50256)).?, "<|endoftext|>"));
 
     const text = "Hello, I'm a test string with numbers 123 and symbols @#$!<|endoftext|>";
     const encoding = try tokenizer.encode(text);
     defer tokenizer.allocator.free(encoding);
 
-    try std.testing.expectEqualSlices(u32, encoding, &[_]u32{
+    try std.testing.expectEqualSlices(u21, encoding, &[_]u21{
         15496, 11, 314, 1101, 257, 1332, 4731, 351,
         3146, 17031, 290, 14354, 2488, 29953, 0, 50256
     });

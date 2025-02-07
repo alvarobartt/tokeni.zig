@@ -48,7 +48,7 @@ pub fn main() !void {
         const input_ids = try tokenizer.encode(buffer);
         defer allocator.free(input_ids);
 
-        try std.testing.expectEqual(@as(u32, 50256), input_ids[input_ids.len - 1]);
+        try std.testing.expectEqual(@as(u21, 50256), input_ids[input_ids.len - 1]);
     }
 
     const elapsed_ns = timer.read();
