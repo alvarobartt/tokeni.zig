@@ -72,13 +72,13 @@ pub const Tokenizer = struct {
             const merges_content = try std.fs.cwd().readFileAlloc(allocator, merges_path, 1024 * 1024);
             defer allocator.free(merges_content);
 
-            var lines = std.mem.tokenize(u8, merges_content, "\n");
+            var lines = std.mem.split(u8, merges_content, "\n");
             // skip the first line as it contains the `tokenizers` version
             // e.g. `#version: 0.2`
             _ = lines.next();
             var idx: u21 = 0;
             while (lines.next()) |line| {
-                var parts = std.mem.tokenize(u8, line, " ");
+                var parts = std.mem.split(u8, line, " ");
                 const left_part = parts.next() orelse continue;
                 const right_part = parts.next() orelse continue;
 
