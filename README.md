@@ -10,8 +10,8 @@ Pair Encoding (BPE) tokenizer in Zig.
 
 ## Usage
 
-First you need to download the tokenizer-related files (`vocab.json` and `merges.txt`)
-from the Hugging Face Hub at [`openai-community/gpt2`](https://huggingface.co/openai-community/gpt2).
+First you need to download the `tokenizer.json` file from the Hugging Face Hub
+at [`openai-community/gpt2`](https://huggingface.co/openai-community/gpt2).
 
 ```zig
 const std = @import("std");
@@ -22,18 +22,8 @@ pub fn main() !void {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var special_tokens = std.ArrayList([]const u8).init(allocator);
-    defer special_tokens.deinit();
-    try special_tokens.append("<|endoftext|>");
-
-    // https://huggingface.co/openai-community/gpt2
-    var tokenizer = try tokeni.Tokenizer.init(
-        "vocab.json",
-        "merges.txt",
-        "('s|'t|'re|'ve|'m|'ll|'d| ?[[:alpha:]]+| ?[[:digit:]]+| ?[^[:alnum:][:space:]]+| +[[:space:]]*| +)",
-        special_tokens,
-        allocator,
-    );
+    // https://huggingface.co/openai-community/gpt2/tree/main/tokenizer.json
+    var tokenizer = try tokeni.Tokenizer.init("tokenizer.json", allocator);
     defer tokenizer.deinit();
 
     const text = "Hello, I'm a test string with numbers 123 and symbols @#$!<|endoftext|>";

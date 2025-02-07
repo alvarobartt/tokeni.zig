@@ -23,74 +23,82 @@ pub const Tokenizer = struct {
     special_tokens: std.ArrayList([]const u8),
     allocator: std.mem.Allocator,
 
-    pub fn init(vocab_path: []const u8, merges_path: []const u8, pattern: []const u8, special_tokens: std.ArrayList([]const u8), allocator: std.mem.Allocator) !Self {
-        var vocab = std.StringHashMap(u21).init(allocator);
-        // TODO: maybe this can be pulled from https://huggingface.co/openai-community/gpt2/blob/main/config.json#L30
-        try vocab.ensureTotalCapacity(50257);
-        errdefer vocab.deinit();
+    pub fn init(tokenizer_file: []const u8, allocator: std.mem.Allocator) !Self {
+        var file = try std.fs.cwd().openFile(tokenizer_file, .{});
+        defer file.close();
 
+        const stat = try file.stat();
+        const buffer = try allocator.alloc(u8, stat.size);
+        defer allocator.free(buffer);
+
+        _ = try file.reader().read(buffer);
+
+        var json = try std.json.parseFromSlice(std.json.Value, allocator, buffer, .{});
+        defer json.deinit();
+
+        var vocab = std.StringHashMap(u21).init(allocator);
+        errdefer vocab.deinit();
         var vocab_r = std.AutoHashMap(u21, []const u8).init(allocator);
-        try vocab_r.ensureTotalCapacity(50257);
         errdefer vocab_r.deinit();
 
-        {
-            // https://ziglang.org/documentation/master/std/#std.fs
-            const vocab_content = try std.fs.cwd().readFileAlloc(allocator, vocab_path, 1024 * 1024);
-            defer allocator.free(vocab_content);
+        var merges = std.ArrayList(Pair).init(allocator);
+        errdefer merges.deinit();
+        var merges_map = std.HashMap(Pair, u21, PairContext, std.hash_map.default_max_load_percentage).initContext(allocator, PairContext{});
+        errdefer merges_map.deinit();
 
-            // https://ziglang.org/documentation/master/std/#std.json
-            var json_tree = try std.json.parseFromSlice(std.json.Value, allocator, vocab_content, .{});
-            defer json_tree.deinit();
+        var special_tokens = std.ArrayList([]const u8).init(allocator);
+        errdefer special_tokens.deinit();
 
-            const root = json_tree.value;
-            if (root == .object) {
-                var it = root.object.iterator();
-                while (it.next()) |entry| {
-                    // as the key is a `[]const u8` i.e. not a primitive type, we need
-                    // to copy it explicitly as otherwise we're just storing the pointer
-                    // which can easily go out of scope and leave the `HashMap` invalid
-                    const key = try allocator.dupe(u8, entry.key_ptr.*);
-                    // on the other hand for primitive types we don't need to explicitly
-                    // copy or dupe those, as those have a fixed size and are easy to copy
-                    // and move
-                    const value = @as(u21, @intCast(entry.value_ptr.*.integer));
+        const model = json.value.object.get("model").?;
+        if (model == .object) {
+            const vocab_json = model.object.get("vocab").?;
+            if (vocab_json == .object) {
+                const obj = vocab_json.object;
+                var i: usize = 0;
+                while (i < obj.count()) : (i += 1) {
+                    const key = try allocator.dupe(u8, obj.keys()[i]);
+                    const value = @as(u21, @intCast(obj.values()[i].integer));
+
                     try vocab.put(key, value);
                     try vocab_r.put(value, key);
                 }
             }
-        }
 
-        var merges = std.ArrayList(Pair).init(allocator);
-        try merges.ensureTotalCapacity(50000);
-        errdefer merges.deinit();
+            const merges_json = model.object.get("merges").?;
+            if (merges_json == .array) {
+                var idx: u21 = 0;
+                for (merges_json.array.items) |merge| {
+                    const content = merge.string;
+                    var splits_it = std.mem.split(u8, content, " ");
 
-        var merges_map = std.HashMap(Pair, u21, PairContext, std.hash_map.default_max_load_percentage).initContext(allocator, PairContext{});
-        try merges_map.ensureTotalCapacity(50000);
-        errdefer merges_map.deinit();
+                    const split_left = splits_it.next() orelse continue;
+                    const left = try allocator.dupe(u8, split_left);
 
-        {
-            const merges_content = try std.fs.cwd().readFileAlloc(allocator, merges_path, 1024 * 1024);
-            defer allocator.free(merges_content);
+                    const split_right = splits_it.next() orelse continue;
+                    const right = try allocator.dupe(u8, split_right);
 
-            var lines = std.mem.split(u8, merges_content, "\n");
-            // skip the first line as it contains the `tokenizers` version
-            // e.g. `#version: 0.2`
-            _ = lines.next();
-            var idx: u21 = 0;
-            while (lines.next()) |line| {
-                var parts = std.mem.split(u8, line, " ");
-                const left_part = parts.next() orelse continue;
-                const right_part = parts.next() orelse continue;
-
-                const left = try allocator.dupe(u8, left_part);
-                const right = try allocator.dupe(u8, right_part);
-                try merges.append(.{ .left = left, .right = right });
-                try merges_map.put(.{ .left = left, .right = right }, idx);
-                idx += 1;
+                    try merges.append(.{ .left = left, .right = right });
+                    try merges_map.put(.{ .left = left, .right = right }, idx);
+                    idx += 1;
+                }
             }
         }
 
-        const regex = try Regex.init(allocator, pattern);
+        const added_tokens = json.value.object.get("added_tokens").?;
+        if (added_tokens == .array) {
+            for (added_tokens.array.items) |added_token| {
+                const is_special = added_token.object.get("special").?;
+                const content = added_token.object.get("content").?;
+                if (is_special == .bool and content == .string) {
+                    if (is_special.bool == true) {
+                        const special_token = try allocator.dupe(u8, content.string);
+                        try special_tokens.append(special_token);
+                    }
+                }
+            }
+        }
+
+        const regex = try Regex.init(allocator, "('s|'t|'re|'ve|'m|'ll|'d| ?[[:alpha:]]+| ?[[:digit:]]+| ?[^[:alnum:][:space:]]+| +[[:space:]]*| +)");
         errdefer regex.deinit();
 
         return .{
@@ -118,6 +126,11 @@ pub const Tokenizer = struct {
         }
         self.merges.deinit();
         self.merges_map.deinit();
+
+        for (self.special_tokens.items) |item| {
+            self.allocator.free(item);
+        }
+        self.special_tokens.deinit();
 
         self.regex.deinit();
     }
@@ -275,20 +288,8 @@ pub const Tokenizer = struct {
 test "Tokenizer" {
     const allocator = std.testing.allocator;
 
-    // TODO: special token initialization can also be read from the `tokenizer_config.json`
-    var special_tokens = std.ArrayList([]const u8).init(allocator);
-    defer special_tokens.deinit();
-    try special_tokens.append("<|endoftext|>");
-
-    // https://huggingface.co/openai-community/gpt2/blob/main/vocab.json
-    // https://huggingface.co/openai-community/gpt2/blob/main/merges.txt
-    var tokenizer = try Tokenizer.init(
-        "vocab.json",
-        "merges.txt",
-        "('s|'t|'re|'ve|'m|'ll|'d| ?[[:alpha:]]+| ?[[:digit:]]+| ?[^[:alnum:][:space:]]+| +[[:space:]]*| +)",
-        special_tokens,
-        allocator,
-    );
+    // https://huggingface.co/openai-community/gpt2/blob/main/tokenizer.json
+    var tokenizer = try Tokenizer.init("tokenizer.json", allocator);
     defer tokenizer.deinit();
 
     try std.testing.expectEqual(@as(u21, 50257), tokenizer.vocab.count());
