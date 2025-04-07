@@ -5,7 +5,7 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
 
     const lib = b.addStaticLibrary(.{
-        .name = "tokeni",
+        .name = "bpe",
         .root_source_file = b.path("src/tokenizer.zig"),
         .target = target,
         .optimize = optimize,
@@ -23,11 +23,11 @@ pub fn build(b: *std.Build) void {
 
     const run_tests = b.addRunArtifact(tests);
 
-    const test_step = b.step("test", "run tokeni.zig tests");
+    const test_step = b.step("test", "run bpe.zig tests");
     test_step.dependOn(&run_tests.step);
 
     const exe = b.addExecutable(.{
-        .name = "tokeni-cli",
+        .name = "bpe-cli",
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,

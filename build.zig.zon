@@ -1,12 +1,13 @@
 .{
-    .name = "tokeni",
-    .version = "0.0.1",
+    .name = "bpe",
+    .version = "0.0.2",
     .dependencies = .{},
     .paths = .{
         "build.zig",
         "build.zig.zon",
         "src",
-        "LICENSE",
+        "LICENSE-APACHE",
+        "LICENSE-MIT",
         "README.md",
     },
 }

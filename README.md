@@ -1,12 +1,10 @@
-# tokeni.zig
+# bpe.zig
 
-`tokeni.zig` (stands for tokenizer + Zig) is a minimal implementation of a Byte
-Pair Encoding (BPE) tokenizer in Zig.
+`bpe.zig` is a minimal implementation of a Byte Pair Encoding (BPE) tokenizer in Zig.
 
 > [!WARNING]
-> This implementation is currently a learning project for exploring Zig and
+> This implementation is currently an educational project for exploring Zig and
 > tokenizer internals (particularly BPE used in models like e.g. GPT-2).
-> Expect rough edges, contributions are more than welcomed!
 
 ## Usage
 
@@ -15,7 +13,7 @@ at [`openai-community/gpt2`](https://huggingface.co/openai-community/gpt2).
 
 ```zig
 const std = @import("std");
-const tokeni = @import("tokeni");
+const Tokenizer = @import("bpe.Tokenizer");
 
 pub fn main() !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
@@ -23,7 +21,7 @@ pub fn main() !void {
     const allocator = arena.allocator();
 
     // https://huggingface.co/openai-community/gpt2/tree/main/tokenizer.json
-    var tokenizer = try tokeni.Tokenizer.init("tokenizer.json", allocator);
+    var tokenizer = try Tokenizer.init("tokenizer.json", allocator);
     defer tokenizer.deinit();
 
     const text = "Hello, I'm a test string with numbers 123 and symbols @#$!<|endoftext|>";
@@ -34,18 +32,13 @@ pub fn main() !void {
 }
 ```
 
-## What's next?
+## License
 
-Mainly making the codebase robust enough, and pushing the performance even further,
-compare this with other solutions such as `tiktoken` or `tokenizers`, maybe eventually
-create Python bindings, add a `from_pretrained` like method to use any BPE-based
-tokenizer from the Hugging Face Hub, add more documentation and tests, etc.
+This project is licensed under either of the following licenses, at your option:
 
-TL;DR a BUNCH of things, but always with learning purposes in mind!
+- [Apache License, Version 2.0](LICENSE-APACHE)
+- [MIT License](LICENSE-MIT)
 
-So I'd say that I'll be committing to this repository somehow frequently until I
-feel confident with Zig, and once I push the implementation as far as I can.
-
----
-
-Programming should be fun, and this is fun to me!
+Unless you explicitly state otherwise, any contribution intentionally submitted
+for inclusion in this project by you, as defined in the Apache-2.0 license, shall
+be dual licensed as above, without any additional terms or conditions.
